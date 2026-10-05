@@ -1,0 +1,92 @@
+import React, { useState, useEffect } from 'react';
+import { View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import CustomerCard from '../components/customers/CustomerCard';
+import BottomNav from '../components/ui/BottomNav';
+import { fetchCustomers } from '../services/mockCustomerApi';
+
+const CustomerScreen = ({ activeTab, onSelectTab }) => {
+  const [customers, setCustomers] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadCustomers = async () => {
+      try {
+        const response = await fetchCustomers();
+        setCustomers(response.data.customers);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadCustomers();
+  }, []);
+
+  const filteredCustomers = customers.filter((item) =>
+    item.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <SafeAreaView className="flex-1 bg-[#f9fafb]">
+      <View className="flex-1 px-6 pt-6">
+
+        {/* Header Title */}
+        <Text className="text-[#0d4761] text-[40px] font-bold mb-4 tracking-tight">Customer</Text>
+
+        {/* Search and Filter Row */}
+        <View className="flex-row justify-between mb-4">
+          <View className="flex-1 flex-row items-center bg-gray-100/80 rounded-full px-4 py-2.5 mr-3">
+            <Ionicons name="search" size={20} color="#9ca3af" className="mr-2" />
+            <TextInput
+              className="flex-1 text-sm text-[#0d4761]"
+              placeholder="Search Customer..."
+              placeholderTextColor="#9ca3af"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+          </View>
+
+          <TouchableOpacity className="flex-row items-center border border-gray-200 bg-white rounded-full px-4 py-2.5">
+            <Ionicons name="funnel-outline" size={14} color="#0d4761" className="mr-2" />
+            <Text className="text-[#0d4761] text-[10px] font-bold tracking-wider">ALPHABETICAL</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Customer List Label */}
+        <Text className="text-center text-gray-400 text-xs italic mb-4">Customer List</Text>
+
+        {/* Customer List */}
+        {loading ? (
+          <ActivityIndicator color="#0d4761" size="large" className="mt-12" />
+        ) : (
+          <FlatList
+            data={filteredCustomers}
+            keyExtractor={(item) => item.id}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 120 }}
+            renderItem={({ item }) => (
+              <CustomerCard
+                name={item.name}
+                contact={item.contactNumber}
+                dateString={item.createdAt}
+              />
+            )}
+          />
+        )}
+      </View>
+
+      {/* Floating Add Customer Button */}
+      <TouchableOpacity className="absolute bottom-40 right-6 w-14 h-14 bg-white border border-gray-200 rounded-full items-center justify-center shadow-sm z-10">
+        <Ionicons name="add" size={28} color="#0d4761" />
+      </TouchableOpacity>
+
+      {/* Bottom Navigation */}
+      <BottomNav activeTab={activeTab} onSelectTab={onSelectTab} />
+    </SafeAreaView>
+  );
+};
+
+export default CustomerScreen;

@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import BottomNav from '../components/ui/BottomNav';
 import DashboardDesign from '../../assets/svg/dashboard-design.svg';
 
-const DashboardScreen = ({ user }) => {
+const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
   return (
     <View className="flex-1 bg-white">
       <ScrollView className="flex-1" bounces={false} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
@@ -21,7 +21,7 @@ const DashboardScreen = ({ user }) => {
         </View>
 
         {/* Main Content */}
-        <View className="px-6 -mt-20 z-10">
+        <View className="px-6 -mt-24 z-10">
 
           {/* Total Sales Section */}
           <Text className="text-[#0d4761] font-bold mb-2">Total Sales:</Text>
@@ -37,11 +37,11 @@ const DashboardScreen = ({ user }) => {
           <View className="bg-[#f4f5f7] rounded-xl p-4 mb-6">
             <View className="flex-row justify-between mb-2">
               <Text className="text-[#0d4761] font-bold text-xs">Driver:</Text>
-              <Text className="text-[#0d4761] font-bold text-xs">Driver</Text>
+              <Text className="text-[#0d4761] font-bold text-xs">Leshka Alcontin</Text>
             </View>
             <View className="flex-row justify-between mb-2">
               <Text className="text-[#0d4761] font-bold text-xs">Plate No.:</Text>
-              <Text className="text-[#0d4761] font-bold text-xs">ABC-1234</Text>
+              <Text className="text-[#0d4761] font-bold text-xs">ABC 1234</Text>
             </View>
             <View className="flex-row justify-between">
               <Text className="text-[#0d4761] font-bold text-xs">Fleet Model:</Text>
@@ -57,7 +57,7 @@ const DashboardScreen = ({ user }) => {
       </ScrollView>
 
       {/* Floating Bottom Nav */}
-      <BottomNav />
+      <BottomNav activeTab={activeTab} onSelectTab={onSelectTab} />
     </View>
   );
 };

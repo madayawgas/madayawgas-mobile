@@ -4,11 +4,16 @@ import { StatusBar } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import SplashScreen from './src/screens/SplashScreen';
 import LoginScreen from './src/screens/LoginScreen';
-import DashboardScreen from './src/screens/DashboardScreen'; // <-- Import Dashboard
+import DashboardScreen from './src/screens/DashboardScreen';
+import CustomerScreen from './src/screens/CustomerScreen';
+import OrderScreen from './src/screens/OrderScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
+import FadeInView from './src/components/ui/FadeInView';
 
 export default function App() {
   const [isReady, setIsReady] = useState(false);
-  const [user, setUser] = useState(null); // <-- Add user state
+  const [user, setUser] = useState(null);
+  const [currentTab, setCurrentTab] = useState('dashboard');
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -16,6 +21,45 @@ export default function App() {
     }, 2500);
     return () => clearTimeout(timer);
   }, []);
+
+  const handleLogout = () => {
+    setUser(null);
+    setCurrentTab('dashboard');
+  };
+
+  const renderActiveScreen = () => {
+    let Content;
+    switch (currentTab) {
+      case 'order':
+        Content = <OrderScreen activeTab={currentTab} onSelectTab={setCurrentTab} />;
+        break;
+      case 'customer':
+        Content = <CustomerScreen activeTab={currentTab} onSelectTab={setCurrentTab} />;
+        break;
+      case 'profile':
+        Content = (
+          <ProfileScreen
+            user={user}
+            onLogout={handleLogout}
+            activeTab={currentTab}
+            onSelectTab={setCurrentTab}
+          />
+        );
+        break;
+      case 'dashboard':
+      default:
+        Content = (
+          <DashboardScreen
+            user={user}
+            activeTab={currentTab}
+            onSelectTab={setCurrentTab}
+          />
+        );
+        break;
+    }
+
+    return <FadeInView key={currentTab}>{Content}</FadeInView>;
+  };
 
   return (
     <SafeAreaProvider>
@@ -26,9 +70,11 @@ export default function App() {
       {!isReady ? (
         <SplashScreen />
       ) : user ? (
-        <DashboardScreen user={user} />
+        renderActiveScreen()
       ) : (
-        <LoginScreen onLogin={(userData) => setUser(userData)} />
+        <FadeInView key="login">
+          <LoginScreen onLogin={(userData) => setUser(userData)} />
+        </FadeInView>
       )}
     </SafeAreaProvider>
   );
