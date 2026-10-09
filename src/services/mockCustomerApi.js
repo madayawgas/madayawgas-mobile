@@ -4,64 +4,49 @@ const mockCustomersData = {
     "count": 6,
     "customers": [
       {
-        "id": "7b8f9e6a-5432-41a9-83bc-9d0e12345678",
+        "id": "1",
         "name": "Leshka Karenderia",
         "address": "Jerome, Agdao, Davao City",
-        "contactNumber": "(+63) 999 999 9999",
+        "contactNumber": "+(63) 999 9999 994",
         "customerType": "COMMERCIAL",
         "isActive": true,
-        "createdAt": "2026-08-28T14:40:00.000Z",
-        "updatedAt": "2026-08-30T10:15:00.000Z"
+        "createdAt": "2026-10-06T14:40:00.000Z"
       },
       {
-        "id": "8c9a0f7b-6543-42ba-94cd-0e1f23456789",
+        "id": "2",
         "name": "Precious Gasoline",
         "address": "Matina Aplaya, Talomo, Davao City",
-        "contactNumber": "(+63) 999 999 9999",
+        "contactNumber": "+(63) 999 9999 995",
         "customerType": "COMMERCIAL",
         "isActive": true,
-        "createdAt": "2026-08-28T14:00:00.000Z",
-        "updatedAt": "2026-08-30T11:20:00.000Z"
+        "createdAt": "2026-09-18T14:00:00.000Z"
       },
       {
-        "id": "9d0b1a8c-7654-43cb-a5de-1f2a34567890",
-        "name": "Davao Central Bakery",
+        "id": "3",
+        "name": "Berning Station",
         "address": "Corner San Pedro St, Davao City",
-        "contactNumber": "+63822245678",
+        "contactNumber": "+(63) 999 9999 9996",
         "customerType": "COMMERCIAL",
         "isActive": true,
-        "createdAt": "2026-08-28T14:40:00.000Z",
-        "updatedAt": "2026-08-28T14:40:00.000Z"
+        "createdAt": "2026-10-08T14:40:00.000Z"
       },
       {
-        "id": "c1a2b3c4-d5e6-7f80-1234-56789abcdef0",
-        "name": "Juan Dela Cruz",
+        "id": "4",
+        "name": "Sofia Gas Station",
         "address": "123 Mabini St., Poblacion, Davao City",
-        "contactNumber": "+639171234567",
+        "contactNumber": "+(63) 999 9999 997",
         "customerType": "RETAIL",
         "isActive": true,
-        "createdAt": "2026-08-28T14:00:00.000Z",
-        "updatedAt": "2026-08-28T14:00:00.000Z"
+        "createdAt": "2026-10-06T14:00:00.000Z"
       },
       {
-        "id": "e3f4a5b6-c7d8-4e9f-8012-3456789abcde",
-        "name": "Mindanao LPG Wholesale Supply",
-        "address": "Buhangin Road, Km 5, Davao City",
-        "contactNumber": "+63822219876",
-        "customerType": "WHOLESALE",
-        "isActive": true,
-        "createdAt": "2026-08-27T09:30:00.000Z",
-        "updatedAt": "2026-08-29T16:45:00.000Z"
-      },
-      {
-        "id": "f4a5b6c7-d8e9-4f0a-9123-456789abcdef",
-        "name": "Golden Harvest Restaurant",
+        "id": "5",
+        "name": "Jollabee Bahada",
         "address": "J.P. Laurel Ave, Bajada, Davao City",
-        "contactNumber": "+63822254321",
+        "contactNumber": "+(63) 999 9999 998",
         "customerType": "COMMERCIAL",
-        "isActive": false,
-        "createdAt": "2026-08-25T08:00:00.000Z",
-        "updatedAt": "2026-08-29T12:00:00.000Z"
+        "isActive": true,
+        "createdAt": "2021-10-09T08:00:00.000Z"
       }
     ]
   }
@@ -71,6 +56,6 @@ export const fetchCustomers = async () => {
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve(mockCustomersData);
-    }, 300);
+    }, 200);
   });
 };

@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import InputField from '../components/ui/InputField';
 import PasswordField from '../components/ui/PasswordField';
 import PrimaryButton from '../components/ui/PrimaryButton';
-import LoginDesign from '../../assets/svg/login-design.svg';
+import LoginDesign from '../../assets/svg/login-bg.svg';
 import Logo2 from '../../assets/svg/logo2.svg';
 import { loginUser } from '../services/mockApi';
 

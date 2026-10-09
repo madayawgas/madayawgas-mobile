@@ -6,7 +6,7 @@ import BottomNav from '../components/ui/BottomNav';
 const OrderScreen = ({ activeTab, onSelectTab }) => {
   return (
     <SafeAreaView className="flex-1 bg-[#f9fafb]">
-      <View className="flex-1 px-6 pt-6">
+      <View className="flex-1 px-6 pt-10">
         <Text className="text-[#0d4761] text-[40px] font-bold mb-6 tracking-tight">Orders</Text>
       </View>
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import BottomNav from '../components/ui/BottomNav';
-import DashboardDesign from '../../assets/svg/dashboard-design.svg';
+import DashboardDesign from '../../assets/svg/dashboard-bg.svg';
 
 const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
   return (
@@ -16,7 +16,7 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
 
           <View className="pt-16 px-6">
             <Text className="text-white text-4xl font-bold">Welcome,</Text>
-            <Text className="text-white text-xl mt-1">{user?.firstName || 'Ryzen'}!</Text>
+            <Text className="text-white text-xl mt-1">{user?.firstName}!</Text>
           </View>
         </View>
 

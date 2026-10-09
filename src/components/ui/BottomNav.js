@@ -47,7 +47,7 @@ const NavTab = ({ iconName, activeIconName, label, isActive, onPress }) => {
 
 const BottomNav = ({ activeTab = 'dashboard', onSelectTab }) => {
   return (
-    <View className="absolute bottom-6 self-center flex-row bg-white rounded-[2rem] shadow-lg border border-gray-200 px-4 py-2 items-center justify-between w-11/12 z-20">
+    <View className="absolute bottom-20 self-center flex-row bg-white rounded-[2rem] shadow-lg border border-gray-200 px-4 py-2 items-center justify-between w-11/12 z-20">
       <NavTab
         label="Home"
         iconName="server-outline"

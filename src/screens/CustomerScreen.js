@@ -1,42 +1,137 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import CustomerCard from '../components/customers/CustomerCard';
 import BottomNav from '../components/ui/BottomNav';
+import AddCustomerScreen from './AddCustomerScreen';
+import CustomerDetailsScreen from './CustomerDetailsScreen';
+import NewOrderScreen from './NewOrderScreen';
+import ConfirmOrderScreen from './ConfirmOrderScreen';
 import { fetchCustomers } from '../services/mockCustomerApi';
+import { fetchProducts } from '../services/mockProductApi';
+import { createOrder } from '../services/mockOrderApi';
 
 const CustomerScreen = ({ activeTab, onSelectTab }) => {
   const [customers, setCustomers] = useState([]);
+  const [allProducts, setAllProducts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // Sub-screen navigation states: 'list' | 'add' | 'details' | 'new_order' | 'confirm'
+  const [subStep, setSubStep] = useState('list');
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [selectedProductIds, setSelectedProductIds] = useState([]);
+
   useEffect(() => {
-    const loadCustomers = async () => {
+    const loadInitialData = async () => {
       try {
-        const response = await fetchCustomers();
-        setCustomers(response.data.customers);
+        const [customerRes, productData] = await Promise.all([
+          fetchCustomers(),
+          fetchProducts(),
+        ]);
+        setCustomers(customerRes.data.customers);
+        setAllProducts(productData);
       } catch (error) {
         console.error(error);
       } finally {
         setLoading(false);
       }
     };
-    loadCustomers();
+    loadInitialData();
   }, []);
 
   const filteredCustomers = customers.filter((item) =>
     item.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const selectedProductsList = allProducts.filter((p) =>
+    selectedProductIds.includes(p.id)
+  );
+
+  const handleConfirmOrder = async (orderSummaryData) => {
+    try {
+      const formattedItems = Object.keys(orderSummaryData.quantities).map((pId) => {
+        const product = allProducts.find((p) => p.id === pId);
+        return {
+          id: pId,
+          name: product?.name || 'Unknown Product',
+          price: product?.price || 0,
+          quantity: orderSummaryData.quantities[pId],
+        };
+      });
+
+      const payload = {
+        customerId: selectedCustomer?.id || 'CUST-001',
+        customerName: selectedCustomer?.name || 'Leshka Karenderia',
+        items: formattedItems,
+        totalAmount: orderSummaryData.total,
+      };
+
+      const result = await createOrder(payload);
+
+      if (result.success) {
+        Alert.alert(
+          'Order Placed!',
+          `Order ID: ${result.data.orderId}\nTotal: ₱ ${result.data.totalAmount.toLocaleString()}`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                setSubStep('details');
+                setSelectedProductIds([]);
+              },
+            },
+          ]
+        );
+      }
+    } catch (err) {
+      console.error('Order creation failed:', err);
+    }
+  };
+
+  if (subStep === 'add') {
+    return <AddCustomerScreen onBack={() => setSubStep('list')} />;
+  }
+
+  if (subStep === 'details') {
+    return (
+      <CustomerDetailsScreen
+        customer={selectedCustomer}
+        onBack={() => setSubStep('list')}
+        onAddOrder={() => setSubStep('new_order')}
+      />
+    );
+  }
+
+  if (subStep === 'new_order') {
+    return (
+      <NewOrderScreen
+        onBack={() => setSubStep('details')}
+        onContinue={(productIds) => {
+          setSelectedProductIds(productIds);
+          setSubStep('confirm');
+        }}
+      />
+    );
+  }
+
+  if (subStep === 'confirm') {
+    return (
+      <ConfirmOrderScreen
+        customer={selectedCustomer}
+        selectedProducts={selectedProductsList}
+        onBack={() => setSubStep('new_order')}
+        onConfirm={handleConfirmOrder}
+      />
+    );
+  }
+
   return (
     <SafeAreaView className="flex-1 bg-[#f9fafb]">
-      <View className="flex-1 px-6 pt-6">
-
-        {/* Header Title */}
+      <View className="flex-1 px-6 pt-10">
         <Text className="text-[#0d4761] text-[40px] font-bold mb-4 tracking-tight">Customer</Text>
 
-        {/* Search and Filter Row */}
         <View className="flex-row justify-between mb-4">
           <View className="flex-1 flex-row items-center bg-gray-100/80 rounded-full px-4 py-2.5 mr-3">
             <Ionicons name="search" size={20} color="#9ca3af" className="mr-2" />
@@ -49,16 +144,14 @@ const CustomerScreen = ({ activeTab, onSelectTab }) => {
             />
           </View>
 
-          <TouchableOpacity className="flex-row items-center border border-gray-200 bg-white rounded-full px-4 py-2.5">
+          <TouchableOpacity className="flex-row items-center border border-gray-200 bg-white rounded-full px-4 py-1.5">
             <Ionicons name="funnel-outline" size={14} color="#0d4761" className="mr-2" />
             <Text className="text-[#0d4761] text-[10px] font-bold tracking-wider">ALPHABETICAL</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Customer List Label */}
         <Text className="text-center text-gray-400 text-xs italic mb-4">Customer List</Text>
 
-        {/* Customer List */}
         {loading ? (
           <ActivityIndicator color="#0d4761" size="large" className="mt-12" />
         ) : (
@@ -72,18 +165,23 @@ const CustomerScreen = ({ activeTab, onSelectTab }) => {
                 name={item.name}
                 contact={item.contactNumber}
                 dateString={item.createdAt}
+                onPress={() => {
+                  setSelectedCustomer(item);
+                  setSubStep('details');
+                }}
               />
             )}
           />
         )}
       </View>
 
-      {/* Floating Add Customer Button */}
-      <TouchableOpacity className="absolute bottom-40 right-6 w-14 h-14 bg-white border border-gray-200 rounded-full items-center justify-center shadow-sm z-10">
+      <TouchableOpacity
+        onPress={() => setSubStep('add')}
+        className="absolute bottom-60 right-6 w-14 h-14 bg-white border border-gray-200 rounded-full items-center justify-center shadow-sm z-10"
+      >
         <Ionicons name="add" size={28} color="#0d4761" />
       </TouchableOpacity>
 
-      {/* Bottom Navigation */}
       <BottomNav activeTab={activeTab} onSelectTab={onSelectTab} />
     </SafeAreaView>
   );
