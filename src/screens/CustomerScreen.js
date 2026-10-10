@@ -62,8 +62,8 @@ const CustomerScreen = ({ activeTab, onSelectTab }) => {
       });
 
       const payload = {
-        customerId: selectedCustomer?.id || 'CUST-001',
-        customerName: selectedCustomer?.name || 'Leshka Karenderia',
+        customerId: selectedCustomer?.id,
+        customerName: selectedCustomer?.name,
         items: formattedItems,
         totalAmount: orderSummaryData.total,
       };
