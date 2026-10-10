@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { View, Text, Animated, PanResponder, Dimensions, ScrollView } from 'react-native';
+import { View, Text, Animated, PanResponder, Dimensions, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import PrimaryButton from '../ui/PrimaryButton';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -8,27 +9,29 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const HEADER_OFFSET = 80;
 const DRAWER_HEIGHT = SCREEN_HEIGHT - HEADER_OFFSET;
 
-// Increased resting peek height to give ample room below the total pill
-const PEEK_HEIGHT = 235;
+// Resting peek height accommodating the new taller bottom anchored block
+const PEEK_HEIGHT = 245;
 
 const EXPANDED_OFFSET = 0;
 const PEEK_OFFSET = DRAWER_HEIGHT - PEEK_HEIGHT;
 
 const OrderSummaryDrawer = ({
-  customerName = 'Leshka Karenderia',
+  customerName = 'Precious Gasoline',
   selectedProducts = [],
   quantities = {},
   totalAmount = 0,
   onConfirm,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState('Gcash');
+  const [showPaymentOptions, setShowPaymentOptions] = useState(false);
 
   // Starts minimized at PEEK_OFFSET
   const translateY = useRef(new Animated.Value(PEEK_OFFSET)).current;
   const currentOffset = useRef(PEEK_OFFSET);
 
-  // Interpolate counter-translation so button remains stationary on screen
-  const buttonTranslateY = translateY.interpolate({
+  // Interpolate counter-translation so the bottom block remains stationary on screen
+  const bottomTranslateY = translateY.interpolate({
     inputRange: [EXPANDED_OFFSET, PEEK_OFFSET],
     outputRange: [0, -PEEK_OFFSET],
     extrapolate: 'clamp',
@@ -37,6 +40,9 @@ const OrderSummaryDrawer = ({
   const animateToOffset = (toValue) => {
     currentOffset.current = toValue;
     setIsExpanded(toValue === EXPANDED_OFFSET);
+    // Hide payment options if drawer is dismissed
+    if (toValue !== EXPANDED_OFFSET) setShowPaymentOptions(false);
+
     Animated.spring(translateY, {
       toValue,
       useNativeDriver: true,
@@ -76,7 +82,7 @@ const OrderSummaryDrawer = ({
     if (!isExpanded) {
       animateToOffset(EXPANDED_OFFSET); // Slide up below header
     } else {
-      onConfirm(); // Confirm order
+      onConfirm(paymentMethod); // Pass selected payment method up
     }
   };
 
@@ -103,90 +109,145 @@ const OrderSummaryDrawer = ({
           borderColor: '#D9D9D9',
           borderBottomWidth: 0,
         }}
-        className="flex-1 bg-white px-6 pt-3 relative overflow-hidden"
+        className="flex-1 bg-white pt-3 relative overflow-hidden"
       >
-        {/* Scrollable Content Area */}
+        {/* Scrollable Content Area (Only visible when expanded) */}
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 100 }}
+          contentContainerStyle={{ paddingBottom: 220, paddingHorizontal: 24 }}
           bounces={false}
         >
           {/* Top Drag Handle */}
-          <View {...panResponder.panHandlers} className="w-full items-center pt-1 pb-1 bg-white">
-            <View className="w-12 h-1 bg-[#0d4761] rounded-full mb-2" />
-            <Text className="text-gray-400 text-xs italic mb-2">Order details</Text>
+          <View {...panResponder.panHandlers} className="w-full items-center pt-1 pb-4 bg-white">
+            <View className="w-14 h-1.5 bg-[#0d4761] rounded-full mb-2" />
+            <Text className="text-gray-400 text-[10px] italic">Order details</Text>
           </View>
 
-          {/* Customer Name Row */}
-          {!isExpanded ? (
-            <View className="flex-row justify-between items-center mb-3 px-1">
-              <Text className="text-gray-400 text-sm font-medium">Customer Name</Text>
-              <Text className="text-[#0d4761] font-bold text-base">{customerName}</Text>
-            </View>
-          ) : (
-            <Text className="text-[#0d4761] text-center text-xl font-bold my-2">
-              {customerName}
-            </Text>
-          )}
-
-          {/* Total Capsule */}
-          <View className="bg-white border border-[#D9D9D9] rounded-full px-6 py-3.5 flex-row items-center justify-between shadow-xs mb-6">
-            <Text className="text-gray-500 font-medium text-sm">
-              {isExpanded ? 'Total:' : 'Order Total'}
-            </Text>
-            <Text className="text-[#0d4761] font-bold text-xl tracking-tight">
-              ₱ {totalAmount.toLocaleString('en-US', { minimumFractionDigits: 0 })}
-            </Text>
-          </View>
-
-          {/* Expanded Order Breakdown Table */}
+          {/* Expanded Content View */}
           {isExpanded && (
-            <View className="bg-white border border-[#D9D9D9] rounded-[28px] p-4 mb-4">
-              <Text className="text-center text-gray-400 text-xs italic mb-3">
-                Product order
-              </Text>
+            <View className="mt-2">
+              <Text className="text-[#0d4761] font-bold text-lg mb-4">Order Summary</Text>
 
-              <View className="flex-row justify-between border-b border-gray-100 pb-2 mb-2 px-1">
-                <Text className="text-gray-400 text-[11px] italic w-[30%]">Product</Text>
-                <Text className="text-gray-400 text-[11px] italic text-center w-[20%]">Quantity</Text>
-                <Text className="text-gray-400 text-[11px] italic text-right w-[22%]">Price</Text>
-                <Text className="text-gray-400 text-[11px] italic text-right w-[28%]">Total</Text>
-              </View>
-
+              {/* Product List */}
               {selectedProducts.map((p) => {
                 const qty = quantities[p.id] || 0;
                 const lineTotal = qty * p.price;
                 return (
-                  <View key={p.id} className="flex-row justify-between items-center py-1.5 px-1">
-                    <Text className="text-[#0d4761] text-xs font-semibold w-[30%]" numberOfLines={1}>
-                      {p.name}
-                    </Text>
-                    <Text className="text-[#0d4761] text-xs font-semibold text-center w-[20%]">
-                      {qty}
-                    </Text>
-                    <Text className="text-[#0d4761] text-xs font-semibold text-right w-[22%]">
-                      ₱ {p.price.toFixed(0)}
-                    </Text>
-                    <Text className="text-[#0d4761] text-xs font-bold text-right w-[28%]">
-                      ₱ {lineTotal.toLocaleString('en-US')}
+                  <View key={p.id} className="flex-row items-center mb-5">
+                    {/* Placeholder Image container */}
+                    <View className="w-16 h-16 rounded-2xl border border-gray-100 bg-white items-center justify-center shadow-xs mr-4">
+                      <Image
+                        source={require('../../../assets/images/placeholder.png')}
+                        style={{ width: 40, height: 40, resizeMode: 'contain' }}
+                      />
+                    </View>
+
+                    {/* Product Details */}
+                    <View className="flex-1 justify-center">
+                      <Text className="text-[#0d4761] font-bold text-sm mb-1" numberOfLines={1}>
+                        {p.name}
+                      </Text>
+                      <Text className="text-[#0d4761] text-xs font-semibold">
+                        Qty: {qty}
+                      </Text>
+                    </View>
+
+                    {/* Price */}
+                    <Text className="text-[#0d4761] font-medium text-sm">
+                      ₱ {lineTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </Text>
                   </View>
                 );
               })}
+
+              {/* Payment Method Section (Fixed Alignment) */}
+              <View className="mt-6 mb-3 flex-row items-center">
+                <Text className="text-[#0d4761] font-bold text-base mr-2">Payment Method</Text>
+                <Text className="text-gray-400 text-[10px] italic">Select a payment method</Text>
+              </View>
+
+              {!showPaymentOptions ? (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={() => setShowPaymentOptions(true)}
+                  className="flex-row items-center justify-between border border-gray-200 rounded-full py-3.5 px-6"
+                >
+                  <View className="flex-row items-center">
+                    <Text className="text-[#0d4761] font-bold text-sm mr-2">{paymentMethod}</Text>
+                    <Text className="text-gray-400 text-[11px] italic">
+                      {paymentMethod === 'Gcash' ? '(Online Payment)' : '(Pay on Delivery)'}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-down" size={16} color="#0d4761" />
+                </TouchableOpacity>
+              ) : (
+                <View className="border border-gray-200 rounded-[24px] overflow-hidden">
+                  {/* Gcash Option */}
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setPaymentMethod('Gcash');
+                      setShowPaymentOptions(false);
+                    }}
+                    className={`flex-row items-center justify-between py-4 px-6 border-b border-gray-100 ${paymentMethod === 'Gcash' ? 'bg-[#f0f7fa]' : 'bg-white'}`}
+                  >
+                    <View className="flex-row items-center">
+                      <Text className="text-[#0d4761] font-bold text-sm mr-2">Gcash</Text>
+                      <Text className="text-gray-400 text-[11px] italic">(Online Payment)</Text>
+                    </View>
+                    {paymentMethod === 'Gcash' && <Ionicons name="checkmark-circle" size={20} color="#0d4761" />}
+                  </TouchableOpacity>
+
+                  {/* Cash Option */}
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setPaymentMethod('Cash');
+                      setShowPaymentOptions(false);
+                    }}
+                    className={`flex-row items-center justify-between py-4 px-6 ${paymentMethod === 'Cash' ? 'bg-[#f0f7fa]' : 'bg-white'}`}
+                  >
+                    <View className="flex-row items-center">
+                      <Text className="text-[#0d4761] font-bold text-sm mr-2">Cash</Text>
+                      <Text className="text-gray-400 text-[11px] italic">(Pay on Delivery)</Text>
+                    </View>
+                    {paymentMethod === 'Cash' && <Ionicons name="checkmark-circle" size={20} color="#0d4761" />}
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           )}
         </ScrollView>
 
-        {/* Fixed Position Bottom Button */}
+        {/* Fixed Position Bottom Block (Customer, Total, Button) */}
         <Animated.View
           style={{
             position: 'absolute',
             bottom: 24,
             left: 24,
             right: 24,
-            transform: [{ translateY: buttonTranslateY }],
+            transform: [{ translateY: bottomTranslateY }],
+            backgroundColor: 'white',
           }}
         >
+          {/* Fading Top Gradient */}
+          <View className="absolute -top-6 left-0 right-0 h-6 bg-white opacity-90" />
+
+          {/* Customer Name Row */}
+          <View className="flex-row justify-between items-center mb-3 px-2">
+            <Text className="text-[#8c9fAB] text-sm">Customer Name</Text>
+            <Text className="text-[#0d4761] font-bold text-sm">{customerName}</Text>
+          </View>
+
+          {/* Total Capsule */}
+          <View className="bg-white border border-[#D9D9D9] rounded-full px-6 py-4 flex-row items-center justify-between mb-4">
+            <Text className="text-[#0d4761] font-medium text-sm">Order Total</Text>
+            <Text className="text-[#0d4761] font-bold text-[22px] tracking-tight">
+              ₱ {totalAmount.toLocaleString('en-US')}
+            </Text>
+          </View>
+
+          {/* Action Button */}
           <PrimaryButton
             title={isExpanded ? 'CONFIRM' : 'PROCEED'}
             onPress={handleActionPress}
