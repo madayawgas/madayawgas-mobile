@@ -6,8 +6,6 @@ import {
   AuthSessionReason,
 } from './sessionStore';
 
-export type { AuthSessionListener, AuthSessionReason };
-
 export const authService = {
   /**
    * Subscribes to authentication session state changes.

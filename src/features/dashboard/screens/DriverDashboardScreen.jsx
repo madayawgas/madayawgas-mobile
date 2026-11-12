@@ -30,12 +30,6 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
   const [isOnline, setIsOnline] = useState(true);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
 
-  // Shift Attendance & Timer State
-  const [isOnDuty, setIsOnDuty] = useState(false);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [isDutyActionPending, setIsDutyActionPending] = useState(false);
-  const timerRef = useRef(null);
-
   // Emergency SOS Cooldown State (60 seconds)
   const [sosCooldown, setSosCooldown] = useState(0);
   const cooldownTimerRef = useRef(null);
@@ -53,22 +47,6 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
     try {
       const data = await driverService.getDashboardContext(user);
       setContext(data);
-
-      if (data.shift && data.shift.status === 'ON_DUTY') {
-        setIsOnDuty(true);
-        if (data.shift.clock_in_time) {
-          const startTime = new Date(data.shift.clock_in_time).getTime();
-          const elapsed = !isNaN(startTime)
-            ? Math.max(0, Math.floor((Date.now() - startTime) / 1000))
-            : 0;
-          setElapsedSeconds(elapsed);
-        } else {
-          setElapsedSeconds(0);
-        }
-      } else {
-        setIsOnDuty(false);
-        setElapsedSeconds(0);
-      }
     } catch (e) {
       console.warn('[DriverDashboardScreen] Error loading data:', e);
     } finally {
@@ -140,10 +118,6 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
           );
           break;
 
-        case 'ATTENDANCE_DUTY_UPDATED':
-          loadDashboardData();
-          break;
-
         case 'VEHICLE_DRIVER_ASSIGNED':
           loadDashboardData();
           Alert.alert(
@@ -182,20 +156,6 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
     loadDashboardData();
   }, [loadDashboardData]);
 
-  // Active shift elapsed timer
-  useEffect(() => {
-    if (isOnDuty) {
-      timerRef.current = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isOnDuty]);
-
   // SOS Cooldown timer
   useEffect(() => {
     if (sosCooldown > 0) {
@@ -207,60 +167,6 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
       if (cooldownTimerRef.current) clearTimeout(cooldownTimerRef.current);
     };
   }, [sosCooldown]);
-
-  const formatElapsedTime = (totalSeconds) => {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-  };
-
-  // Shift Attendance Handlers
-  const handleStartShift = async () => {
-    if (isDutyActionPending) return;
-    setIsDutyActionPending(true);
-    try {
-      const shift = await driverService.clockIn(user, context?.telemetry?.truck_id);
-      setIsOnDuty(true);
-      setElapsedSeconds(0);
-      setContext((prev) => (prev ? { ...prev, shift } : prev));
-      Alert.alert('Shift Started', 'Duty attendance recorded. Have a safe route delivery!');
-    } catch (e) {
-      Alert.alert('Error', e.message || 'Failed to start shift');
-    } finally {
-      setIsDutyActionPending(false);
-    }
-  };
-
-  const handleEndShift = () => {
-    if (isDutyActionPending) return;
-    Alert.alert(
-      'End Shift',
-      'Are you sure you want to clock out and end your duty shift for today?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm End Shift',
-          style: 'destructive',
-          onPress: async () => {
-            setIsDutyActionPending(true);
-            try {
-              const shift = await driverService.clockOut(user);
-              setIsOnDuty(false);
-              setElapsedSeconds(0);
-              setContext((prev) => (prev ? { ...prev, shift } : prev));
-              Alert.alert('Shift Ended', 'You are now off-duty. Rest well!');
-            } catch (e) {
-              Alert.alert('Error', e.message || 'Failed to end shift');
-            } finally {
-              setIsDutyActionPending(false);
-            }
-          },
-        },
-      ]
-    );
-  };
 
   const handleSosDispatched = () => {
     setSosCooldown(60); // 60-second debounce cooldown
@@ -393,82 +299,6 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
           </View>
         ) : (
           <View className="px-6 -mt-4 z-10">
-            {/* Shift Attendance Banner */}
-            <View className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 mb-4">
-              <View className="flex-row justify-between items-center mb-3">
-                <View className="flex-row items-center">
-                  <View
-                    className={`w-3 h-3 rounded-full mr-2 ${
-                      isOnDuty ? 'bg-emerald-500' : 'bg-gray-400'
-                    }`}
-                  />
-                  <Text className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-                    Shift Attendance
-                  </Text>
-                </View>
-
-                {isOnDuty ? (
-                  <View className="bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                    <Text className="text-emerald-700 text-xs font-bold">ACTIVE SHIFT</Text>
-                  </View>
-                ) : (
-                  <View className="bg-gray-100 px-2.5 py-0.5 rounded-full">
-                    <Text className="text-gray-600 text-xs font-semibold">Off-Duty</Text>
-                  </View>
-                )}
-              </View>
-
-              {isOnDuty ? (
-                <View className="flex-row items-center justify-between pt-1">
-                  <View>
-                    <Text className="text-gray-400 text-xs font-medium">Elapsed Duty Time</Text>
-                    <Text className="text-[#0d4761] text-3xl font-extrabold tracking-tight">
-                      {formatElapsedTime(elapsedSeconds)}
-                    </Text>
-                  </View>
-
-                  <TouchableOpacity
-                    onPress={handleEndShift}
-                    disabled={isDutyActionPending}
-                    className={`bg-red-50 border border-red-200 px-5 py-3 rounded-xl flex-row items-center ${
-                      isDutyActionPending ? 'opacity-50' : 'active:opacity-80'
-                    }`}
-                  >
-                    {isDutyActionPending ? (
-                      <ActivityIndicator size="small" color="#dc2626" style={{ marginRight: 6 }} />
-                    ) : (
-                      <Ionicons name="log-out-outline" size={18} color="#dc2626" />
-                    )}
-                    <Text className="text-red-600 text-xs font-bold uppercase ml-1.5">
-                      {isDutyActionPending ? 'Ending...' : 'End Shift'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <View className="pt-1">
-                  <Text className="text-gray-600 text-xs mb-3">
-                    You are currently off-duty. Start your shift to activate attendance and route dispatch tracking.
-                  </Text>
-                  <TouchableOpacity
-                    onPress={handleStartShift}
-                    disabled={isDutyActionPending}
-                    className={`bg-[#0d4761] py-3.5 rounded-xl flex-row items-center justify-center shadow-sm ${
-                      isDutyActionPending ? 'opacity-50' : 'active:opacity-90'
-                    }`}
-                  >
-                    {isDutyActionPending ? (
-                      <ActivityIndicator size="small" color="#facc15" style={{ marginRight: 8 }} />
-                    ) : (
-                      <Ionicons name="play" size={16} color="#facc15" />
-                    )}
-                    <Text className="text-white text-sm font-bold uppercase ml-2 tracking-wider">
-                      {isDutyActionPending ? 'Starting Duty...' : 'Start Shift (Clock In)'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-
             {/* Emergency SOS Action Button */}
             <View className="mb-4">
               <TouchableOpacity

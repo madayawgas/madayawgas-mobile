@@ -20,7 +20,7 @@ import NewOrderScreen from './NewOrderScreen';
 import ConfirmOrderScreen from './ConfirmOrderScreen';
 import ReceiptScreen from './ReceiptScreen';
 import { salesService } from '../../services/salesService';
-import { tripRepository, customerRepository } from '../../database';
+import { customerRepository } from '../../database';
 import { useBackHandler } from '../../hooks/useBackHandler';
 
 const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
@@ -275,14 +275,14 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
     }
   };
 
-  const handleDoneReceipt = () => {
+  function handleDoneReceipt() {
     setSubStep('list');
     setSelectedProductIds([]);
     setOrderQuantities({});
     setSelectedCustomer(null);
     setCompletedOrderData(null);
     loadData();
-  };
+  }
 
   const handleAddCustomer = async (customerData) => {
     try {

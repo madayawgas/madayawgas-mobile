@@ -4,98 +4,13 @@ import {
   VehicleTelemetry,
   MaintenanceServiceLogItem,
   FuelLog,
-  DriverShift,
 } from '@/types';
-
-export interface ClockInResponseData {
-  shiftId: string;
-  driverId: string;
-  status: 'ON_DUTY';
-  clockInTime: string;
-}
-
-export interface ClockOutResponseData {
-  shiftId: string;
-  driverId: string;
-  status: 'OFF_DUTY';
-  clockOutTime: string;
-}
 
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const driverApi = {
   // ==========================================
-  // 1. Shift Attendance Endpoints
-  // ==========================================
-  async clockIn(driverId: string, truckId?: string): Promise<ClockInResponseData> {
-    const now = new Date().toISOString();
-    const res = await apiClient<any>('/attendance/clock-in', {
-      method: 'POST',
-      body: JSON.stringify({
-        userId: driverId,
-        driverId,
-        truckId,
-        clockInTime: now,
-        timestamp: now,
-      }),
-    });
-    const d = res.data;
-    return {
-      shiftId: d?.id || d?.shiftId || `shift-${Date.now()}`,
-      driverId: d?.userId || d?.driverId || driverId,
-      status: 'ON_DUTY',
-      clockInTime: d?.clockInTime || d?.clock_in_time || now,
-    };
-  },
-
-  async clockOut(driverId: string, shiftId?: string): Promise<ClockOutResponseData> {
-    const now = new Date().toISOString();
-    const isShiftIdUuid = Boolean(shiftId && UUID_REGEX.test(shiftId));
-    const payload: Record<string, any> = {
-      userId: driverId,
-      driverId,
-      clockOutTime: now,
-      timestamp: now,
-    };
-    if (isShiftIdUuid) {
-      payload.attendanceId = shiftId;
-      payload.shiftId = shiftId;
-    }
-
-    const res = await apiClient<any>('/attendance/clock-out', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    const d = res.data;
-    return {
-      shiftId: d?.id || d?.shiftId || shiftId || `shift-${Date.now()}`,
-      driverId: d?.userId || d?.driverId || driverId,
-      status: 'OFF_DUTY',
-      clockOutTime: d?.clockOutTime || d?.clock_out_time || now,
-    };
-  },
-
-  async fetchActiveShift(userId?: string): Promise<DriverShift | null> {
-    try {
-      const endpoint = userId ? `/attendance/active?userId=${encodeURIComponent(userId)}` : '/attendance/active';
-      const res = await apiClient<any>(endpoint);
-      const d = res.data;
-      if (!d || !d.id) return null;
-      return {
-        id: d.id,
-        driver_id: d.userId || userId || '',
-        status: d.status === 'ACTIVE' || d.status === 'ON_DUTY' ? 'ON_DUTY' : 'OFF_DUTY',
-        clock_in_time: d.clockInTime || d.clock_in_time || null,
-        clock_out_time: d.clockOutTime || d.clock_out_time || null,
-        synced: true,
-      };
-    } catch {
-      return null;
-    }
-  },
-
-  // ==========================================
-  // 2. Emergency SOS Alert
+  // 1. Emergency SOS Alert
   // ==========================================
   async triggerEmergencyAlert(payload: EmergencyAlertPayload): Promise<any> {
     const body: Record<string, any> = {

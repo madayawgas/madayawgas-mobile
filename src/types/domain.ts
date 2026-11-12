@@ -119,8 +119,6 @@ export type SyncOperationType =
   | 'CREATE_ORDER'
   | 'CREATE_CUSTOMER'
   | 'ZERO_SALE_DECLARATION'
-  | 'CLOCK_IN'
-  | 'CLOCK_OUT'
   | 'LOG_FUEL'
   | 'REPORT_APPREHENSION'
   | 'REPORT_ISSUE'
@@ -158,17 +156,6 @@ export interface UserSession {
 // ==========================================
 // DRIVER & VEHICLE DOMAIN MODELS
 // ==========================================
-
-export type DutyStatus = 'OFF_DUTY' | 'ON_DUTY';
-
-export interface DriverShift {
-  id: string; // UUID
-  driver_id: string;
-  status: DutyStatus;
-  clock_in_time?: string | null;
-  clock_out_time?: string | null;
-  synced: boolean;
-}
 
 export type VehicleStatus = 'ACTIVE' | 'UNDER_MAINTENANCE' | 'INACTIVE' | 'RETIRED';
 

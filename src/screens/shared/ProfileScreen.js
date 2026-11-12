@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import BottomNav from '../../components/navigation/BottomNav';
 import PrimaryButton from '../../components/ui/PrimaryButton';
 import ProfileBg from '../../../assets/svg/profile-bg.svg';
+import { driverRepository, tripRepository } from '../../database';
+import { driverService } from '../../services/driverService';
+
+const DRIVER_TABS = [
+  { id: 'dashboard', label: 'Cabin', iconName: 'speedometer-outline', activeIconName: 'speedometer' },
+  { id: 'maintenance', label: 'Vehicle', iconName: 'construct-outline', activeIconName: 'construct' },
+  { id: 'profile', label: 'Profile', iconName: 'person-circle-outline', activeIconName: 'person-circle' },
+];
 
 const formatPhoneNumber = (phone) => {
   if (!phone) return 'N/A';
@@ -27,7 +35,55 @@ const ProfileScreen = ({
   onLogout,
   activeTab,
   onSelectTab,
+  tabs,
+  onEditProfile,
+  vehicle,
 }) => {
+  const isDriver = user?.role === 'Driver' || user?.roleNames?.includes('Driver');
+  const resolvedTabs = tabs || (isDriver ? DRIVER_TABS : undefined);
+  const [vehicleData, setVehicleData] = useState(vehicle || null);
+
+  useEffect(() => {
+    if (vehicle) {
+      setVehicleData(vehicle);
+      return;
+    }
+    if (!isDriver) return;
+
+    let isMounted = true;
+    const loadVehicle = async () => {
+      try {
+        const [telemetry, activeTrip] = await Promise.all([
+          driverRepository.getVehicleTelemetry().catch(() => null),
+          tripRepository.getActiveTrip().catch(() => null),
+        ]);
+        if (isMounted) {
+          setVehicleData({
+            plate_number: telemetry?.plate_number || activeTrip?.vehicle_plate || 'N/A',
+            model: telemetry?.model || activeTrip?.truck_model || 'N/A',
+          });
+        }
+      } catch {}
+    };
+
+    loadVehicle();
+
+    const unsubRealtime = driverService.subscribeRealtime((event) => {
+      if (
+        event === 'VEHICLE_DRIVER_ASSIGNED' ||
+        event === 'VEHICLE_STATUS_UPDATED' ||
+        event === 'FLEET_VEHICLE_RELEASED'
+      ) {
+        loadVehicle();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubRealtime();
+    };
+  }, [isDriver, vehicle]);
+
   const fullName =
     [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'N/A';
   const birthdate = user?.birthdate || 'DD/MM/YYYY';
@@ -141,6 +197,36 @@ const ProfileScreen = ({
             </View>
           </View>
 
+          {/* VEHICLE INFORMATION (DRIVER ONLY) */}
+          {isDriver && (
+            <View className="mb-4 rounded-[34px] border border-[#DFE8EF] bg-white px-5 pb-5 pt-5">
+              <Text className="mb-5 text-[14px] font-bold text-[#7893A8]">
+                Vehicle Information
+              </Text>
+
+              <View className="mb-3 flex-row items-center">
+                <Text className="flex-1 pl-5 text-[13px] text-[#8299AB]">Plate Number</Text>
+                <Text numberOfLines={1} className="flex-1 text-[13px] font-bold text-[#104D6B]">
+                  {vehicleData?.plate_number || 'N/A'}
+                </Text>
+              </View>
+
+              <View className="mb-3 flex-row items-center">
+                <Text className="flex-1 pl-5 text-[13px] text-[#8299AB]">Truck Model</Text>
+                <Text numberOfLines={1} className="flex-1 text-[13px] font-bold text-[#104D6B]">
+                  {vehicleData?.model || 'N/A'}
+                </Text>
+              </View>
+
+              <View className="flex-row items-center">
+                <Text className="flex-1 pl-5 text-[13px] text-[#8299AB]">Operational Role</Text>
+                <Text numberOfLines={1} className="flex-1 text-[13px] font-bold text-[#104D6B]">
+                  Frontline Route Driver
+                </Text>
+              </View>
+            </View>
+          )}
+
           {/* ACCOUNT INFORMATION */}
           <View className="mb-3 rounded-[34px] border border-[#DFE8EF] bg-white px-5 pb-8 pt-5">
             <Text className="mb-5 text-[14px] font-bold text-[#7893A8]">
@@ -169,13 +255,12 @@ const ProfileScreen = ({
               variant="outline"
               borderColor="border-[#DFE8EF]"
               textSize="text-base"
-              onPress={() => {}}
+              onPress={onEditProfile || (() => {})}
             />
 
             <PrimaryButton
               title="LOG OUT"
-              variant="outline"
-              borderColor="border-[#DFE8EF]"
+              variant="danger-outline"
               textSize="text-base"
               onPress={handleLogoutPress}
             />
@@ -184,7 +269,7 @@ const ProfileScreen = ({
       </ScrollView>
 
       {/* Floating Bottom Nav */}
-      <BottomNav activeTab={activeTab} onSelectTab={onSelectTab} />
+      <BottomNav activeTab={activeTab} onSelectTab={onSelectTab} tabs={resolvedTabs} />
     </View>
   );
 };
