@@ -54,20 +54,59 @@ export const driverService = {
             rawTrip.trip_number ||
             `TRIP-${tripId.substring(0, 8)}`;
           const userDisplayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.username || 'Driver';
+          const vehiclePlate =
+            rawTrip.truckPlateNumber ||
+            rawTrip.truck_plate_number ||
+            rawTrip.truck?.plateNumber ||
+            rawTrip.truck?.plate_number ||
+            rawTrip.vehiclePlate ||
+            rawTrip.vehicle_plate ||
+            'N/A';
+          const truckModel =
+            rawTrip.truckModel ||
+            rawTrip.truck_model ||
+            rawTrip.truck?.model ||
+            null;
+          const truckId =
+            rawTrip.truckId ||
+            rawTrip.truck_id ||
+            rawTrip.truck?.id ||
+            null;
+          const driverId =
+            rawTrip.driverId ||
+            rawTrip.driver_id ||
+            rawTrip.driver?.id ||
+            user.id;
+          const driverName =
+            rawTrip.driverName ||
+            rawTrip.driver_name ||
+            rawTrip.driver?.fullName ||
+            userDisplayName;
+          const salesUserName =
+            rawTrip.salesUserName ||
+            rawTrip.sales_user_name ||
+            rawTrip.salesUser?.fullName ||
+            null;
+          const zoneName =
+            rawTrip.zoneName ||
+            rawTrip.zone_name ||
+            rawTrip.zone?.name ||
+            null;
+
           activeTrip = {
             trip_id: tripId,
             trip_number: tripNumber,
-            vehicle_plate: rawTrip.truckPlateNumber || rawTrip.truck_plate_number || 'N/A',
-            driver_name: rawTrip.driverName || rawTrip.driver_name || userDisplayName,
+            vehicle_plate: vehiclePlate,
+            driver_name: driverName,
             sales_user_id: rawTrip.salesUserId || rawTrip.sales_user_id || user.id,
             zone_id: rawTrip.zoneId || rawTrip.zone_id || 'DEFAULT',
             status: rawTrip.status || 'IN_PROGRESS',
             dispatched_at: rawTrip.departureTime || rawTrip.departure_time || new Date().toISOString(),
-            truck_id: rawTrip.truckId || rawTrip.truck_id || null,
-            truck_model: rawTrip.truckModel || rawTrip.truck_model || null,
-            driver_id: rawTrip.driverId || rawTrip.driver_id || user.id,
-            sales_user_name: rawTrip.salesUserName || rawTrip.sales_user_name || null,
-            zone_name: rawTrip.zoneName || rawTrip.zone_name || null,
+            truck_id: truckId,
+            truck_model: truckModel,
+            driver_id: driverId,
+            sales_user_name: salesUserName,
+            zone_name: zoneName,
           };
           await tripRepository.saveActiveTrip(activeTrip);
         } else {
@@ -631,6 +670,73 @@ export const driverService = {
       telemetry: telemetry || defaultTelemetry,
       fuelLogs: Array.isArray(fuelLogs) ? fuelLogs : [],
       maintenanceLogs: Array.isArray(maintenanceLogs) ? maintenanceLogs : [],
+    };
+  },
+
+  /**
+   * Ends an active delivery run upon vehicle return to plant yard with mandatory odometer reading.
+   */
+  async endTrip(
+    user: UserSession,
+    data: {
+      tripId: string;
+      currentOdometer: number;
+      notes?: string;
+    }
+  ): Promise<{ trip: any; odometerTelemetry?: any }> {
+    const currentTelemetry = await driverRepository.getVehicleTelemetry();
+    const baselineOdo = currentTelemetry?.current_odometer || 0;
+
+    // 1. Enforce monotonic odometer rule
+    if (data.currentOdometer < baselineOdo) {
+      throw new Error(
+        `Final odometer reading (${data.currentOdometer.toLocaleString()} km) cannot be less than registered vehicle odometer (${baselineOdo.toLocaleString()} km).`
+      );
+    }
+
+    const payload = {
+      currentOdometer: data.currentOdometer,
+      notes: data.notes?.trim() || undefined,
+      returnTime: new Date().toISOString(),
+    };
+
+    let remoteResult: any = null;
+    let postedDirectly = false;
+
+    if (networkSentinel.isOnline()) {
+      try {
+        remoteResult = await tripApi.endTrip(data.tripId, payload);
+        postedDirectly = true;
+      } catch (e: any) {
+        console.warn('[DriverService] Remote end trip failed, queuing offline:', e.message);
+      }
+    }
+
+    if (!postedDirectly) {
+      await syncQueueRepository.enqueue({
+        id: `end-trip-${data.tripId}-${Date.now()}`,
+        user_id: user.id,
+        operation_type: 'END_TRIP',
+        endpoint: `/trips/${data.tripId}/end`,
+        payload: JSON.stringify(payload),
+      });
+    }
+
+    // Update local SQLite active trip status to 'RETURNED'
+    await tripRepository.updateTripStatus(data.tripId, 'RETURNED');
+
+    // Update local vehicle telemetry odometer
+    const truckId = currentTelemetry?.truck_id;
+    if (truckId) {
+      await driverRepository.updateOdometer(truckId, data.currentOdometer);
+    }
+
+    return {
+      trip: remoteResult?.trip || {
+        id: data.tripId,
+        status: 'RETURNED',
+      },
+      odometerTelemetry: remoteResult?.odometerTelemetry,
     };
   },
 

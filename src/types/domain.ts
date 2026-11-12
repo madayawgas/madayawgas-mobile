@@ -19,7 +19,34 @@ export interface ProductCatalogItem {
   isActive: boolean;
 }
 
-export type TripStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+export type TripStatus = 'PENDING' | 'IN_PROGRESS' | 'RETURNED' | 'COMPLETED' | 'CANCELLED';
+
+export interface EndTripPayload {
+  currentOdometer: number;
+  notes?: string;
+  returnTime?: string;
+}
+
+export interface EndTripResponse {
+  trip: {
+    id: string;
+    tripNumber: string;
+    status: 'RETURNED' | string;
+    truckId: string;
+    driverId: string;
+    salesUserId: string;
+    endedBy: string;
+    returnTime: string;
+    returnOdometerLogId?: string;
+    departureTime: string;
+  };
+  odometerTelemetry?: {
+    logId: string;
+    readingKm: number;
+    distanceDriven: number;
+    requiresMaintenance: boolean;
+  };
+}
 
 export interface ActiveTrip {
   trip_id: string; // UUID
@@ -122,7 +149,8 @@ export type SyncOperationType =
   | 'LOG_FUEL'
   | 'REPORT_APPREHENSION'
   | 'REPORT_ISSUE'
-  | 'EMERGENCY_SOS';
+  | 'EMERGENCY_SOS'
+  | 'END_TRIP';
 
 export interface SyncQueueItem {
   id: string; // UUID

@@ -8,6 +8,7 @@ export type DriverRealtimeEventType =
   | 'TRIP_DISPATCHED'
   | 'TRIP_LOAD_RECORDED'
   | 'VEHICLE_STOCK_UPDATED'
+  | 'TRIP_ENDED'
   | 'TRIP_COMPLETED'
   | 'TRIP_CANCELLED'
   | 'TRIP_RECONCILED'
@@ -108,6 +109,21 @@ class DriverRealtimeManager {
         console.warn('[DriverRealtime] Error updating stock on VEHICLE_STOCK_UPDATED:', e);
       }
       this.notifyListeners('VEHICLE_STOCK_UPDATED', data);
+    });
+
+    this.bindEvent('TRIP_ENDED', async (data) => {
+      console.log('[DriverRealtime] TRIP_ENDED received:', data?.tripNumber);
+      try {
+        const active = await tripRepository.getActiveTrip();
+        if (!data?.tripId || active?.trip_id === data.tripId) {
+          if (active?.trip_id) {
+            await tripRepository.updateTripStatus(active.trip_id, 'RETURNED');
+          }
+        }
+      } catch (e) {
+        console.warn('[DriverRealtime] Error handling trip ended:', e);
+      }
+      this.notifyListeners('TRIP_ENDED', data);
     });
 
     this.bindEvent('TRIP_COMPLETED', async (data) => {

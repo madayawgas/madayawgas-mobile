@@ -1,5 +1,5 @@
 import { apiClient } from '../client';
-import { ActiveAssignmentResponseData, TripStockItem } from '@/types';
+import { ActiveAssignmentResponseData, TripStockItem, EndTripPayload, EndTripResponse } from '@/types';
 
 export const tripApi = {
   async fetchActiveAssignment(): Promise<ActiveAssignmentResponseData> {
@@ -9,6 +9,14 @@ export const tripApi = {
     const rawTrip = res.data?.trip !== undefined ? res.data.trip : res.data;
     const trip = (rawTrip && typeof rawTrip === 'object' && rawTrip.id) ? rawTrip : null;
     return { trip };
+  },
+
+  async endTrip(tripId: string, payload: EndTripPayload): Promise<EndTripResponse> {
+    const res = await apiClient<any>(`/trips/${tripId}/end`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res.data;
   },
 
   async fetchTripStock(tripId: string): Promise<TripStockItem[]> {

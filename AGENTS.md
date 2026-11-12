@@ -123,7 +123,20 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
     - **Role-Agnostic Interception Invariant**: When an admin creates an account or resets credentials, the user is issued a temporary password with `mustChangePassword: true`. In `App.js`, this flag intercepts the screen lifecycle at the root level before any role evaluation (`isDriver`) or screen dispatch (`renderActiveScreen()`). Neither Drivers nor Sales Agents can view dashboards, hydrations, or tabs until the password is changed.
     - **Sync Suppression Invariant**: Background operational sync (`syncScheduler.setActiveUser`) is withheld while `mustChangePassword === true`, preventing backend `403 MUST_CHANGE_PASSWORD` errors.
     - **Session Revocation & Clean Re-login**: The user provides a new password (min. 8 characters with confirmation match), which is dispatched to `POST /api/users/change-password`. On backend success (where `must_change_password` is updated to `false` and all active sessions are revoked), the app displays a success prompt, clears local SecureStore sessions (`authService.clearSession('logout')`), and routes the operator back to `LoginScreen` to sign in cleanly with their newly established credentials.
-- **Dynamic Truck & Driver Context Hydration (`driverService.ts`)**:
+- **Dynamic Truck & Driver Context Hydration & Trip Lifecycle (`driverService.ts`, `DriverDashboardScreen.jsx`)**:
+  - **4-Stage Operational Trip Lifecycle**:
+    `Dispatch (Supervisor) ➔ Active Trip (IN_PROGRESS) ➔ End Trip (Driver only, mandatory odometer) ➔ Reconciliation (Plant physical count & settlement)`.
+  - **Driver-Only End Trip Flow (`EndTripModal.jsx`, `driverService.endTrip`, `tripApi.endTrip`)**:
+    - Accessible directly via the primary action button on the **Active Route Delivery Hero Card** when `status === 'IN_PROGRESS'`.
+    - Opens bottom sheet modal requiring mandatory `currentOdometer` input with real-time monotonic enforcement (`currentOdometer >= baseline`).
+    - Dispatches to `POST /api/trips/:id/end` when online, or enqueues mutation `END_TRIP` into `sync_queue` if offline.
+    - Transitions trip `status` to `'RETURNED'` in local SQLite (`local_active_trip`), updates `local_vehicle_telemetry.current_odometer`, and updates UI to display the amber `RETURNED / AWAITING RECONCILIATION` badge while cleanly hiding the End Trip action.
+  - **Driver Dashboard Ergonomics & Visual Hierarchy**:
+    - High-contrast card system with generous spacing (`space-y-5`) replacing plain flat gray surfaces with elevated pure white cards (`bg-white shadow-sm border border-slate-200/90`) on a crisp canvas (`bg-slate-100`).
+    - **Separation of Concerns**: Odometer and 5,000-km PM telemetry are strictly isolated to the dedicated Vehicle tab (`DriverMaintenanceScreen.jsx`), eliminating clutter from the Cabin dashboard.
+    - **Dynamic Trip Dispatch Hero Card**: Features real-time state badge (`IN PROGRESS` vs `RETURNED`), trip number chip, 4-metric grid (Zone, Sales Partner, Departure Window, Vehicle), and a streamlined, bold single-line `End Delivery Trip` primary CTA.
+    - **Simplified Connectivity Language**: Uses clear, natural "Online" and "Offline" status copy in place of technical jargon.
+    - **Refined Quick Actions**: Re-styled `Log Fuel`, `Citation`, and `Report Defect` cards with distinct colored icon pills and concise microcopy.
   - Resolves active trip assignments via `GET /api/trips/active-assignment` and vehicle telemetry via `GET /api/fleet/my-vehicle`, caching to `local_active_trip` and `local_vehicle_telemetry`.
   - **Authoritative Trip Synchronization & Constraint Integrity**: When a driver or salesperson has no assigned active trip, backend returns `{ data: { trip: null } }`. When online, `driverService.getDashboardContext` authoritatively synchronizes this state and clears stale `local_active_trip` rows, preventing ghost trips and relational foreign key errors. If a cached trip belongs to a different driver, it is purged. When active trips exist, robust multi-layer property fallbacks (`tripNumber ?? trip_number ?? TRIP-<id>`) guarantee constraint compliance.
   - Zero hardcoded vehicle/user UUIDs in business services; dynamic fallback based on loaded trip and cache.
@@ -135,7 +148,7 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
     - Standardized application envelope `{ event, data, meta }` with safe parsing.
     - Central listener for `AUTH_SESSION_REVOKED`: immediately terminates socket connection, invokes `authService.clearSession('revoked')`, and routes back to login.
   - **Frontline Driver Event Dispatcher (`driverRealtimeManager.ts`)**:
-    - **Live Trip Lifecycle**: Handles `TRIP_DISPATCHED`, `TRIP_LOAD_RECORDED`, `TRIP_COMPLETED`, `TRIP_CANCELLED`, and `TRIP_RECONCILED`. Automatically hydrates `local_active_trip` in SQLite and reactively updates `DriverDashboardScreen` from idle standby to active trip delivery.
+    - **Live Trip Lifecycle**: Handles `TRIP_DISPATCHED`, `TRIP_LOAD_RECORDED`, `TRIP_ENDED`, `TRIP_COMPLETED`, `TRIP_CANCELLED`, and `TRIP_RECONCILED`. Automatically hydrates `local_active_trip` in SQLite and reactively updates `DriverDashboardScreen` from idle standby to active trip delivery and returned state.
     - **Fleet Readiness & Grounding**: Handles `FLEET_VEHICLE_GROUNDED` and `FLEET_VEHICLE_RELEASED`, updating `local_vehicle_telemetry.status` in SQLite. Reactively renders or dismisses the prominent red `VEHICLE GROUNDED` exception banner in `DriverMaintenanceScreen` without pull-to-refresh.
     - **Emergency SOS Supervisor Triage**: Handles `EMERGENCY_ALERT_STATUS_UPDATED`, immediately notifying frontline drivers via alerts/prompts when supervisors acknowledge or resolve their emergency alerts.
     - **Additive Write Independence**: Sockets are strictly additive observers. All field mutations (orders, SOS alerts, shifts) persist atomically to local SQLite and `sync_queue` regardless of socket connection state.
