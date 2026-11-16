@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS local_vehicle_inventory (
   product_name TEXT NOT NULL,
   quantity_loaded INTEGER NOT NULL DEFAULT 0,
   quantity_sold INTEGER NOT NULL DEFAULT 0,
-  quantity_remaining INTEGER NOT NULL DEFAULT 0
+  quantity_remaining INTEGER NOT NULL DEFAULT 0 CHECK (quantity_remaining >= 0)
 );
 
 -- 3. Customer Directory & Running Canister Debt Ledger
@@ -118,17 +118,7 @@ CREATE TABLE IF NOT EXISTS local_receipt_sequences (
   PRIMARY KEY (trip_id, series_type)
 );
 
--- 9. Driver Shift Attendance
-CREATE TABLE IF NOT EXISTS local_driver_shift (
-  id TEXT PRIMARY KEY,
-  driver_id TEXT NOT NULL,
-  status TEXT NOT NULL, -- 'ON_DUTY' or 'OFF_DUTY'
-  clock_in_time TEXT,
-  clock_out_time TEXT,
-  synced INTEGER NOT NULL DEFAULT 0
-);
-
--- 10. Vehicle Telemetry & 5,000-km PM Tracking
+-- 9. Vehicle Telemetry & 5,000-km PM Tracking
 CREATE TABLE IF NOT EXISTS local_vehicle_telemetry (
   truck_id TEXT PRIMARY KEY,
   plate_number TEXT NOT NULL,

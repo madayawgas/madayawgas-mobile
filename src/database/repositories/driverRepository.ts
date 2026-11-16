@@ -1,6 +1,5 @@
 import { getDatabase } from '../connection';
 import {
-  DriverShift,
   VehicleTelemetry,
   FuelLog,
   ApprehensionReport,
@@ -9,89 +8,7 @@ import {
 
 export const driverRepository = {
   // ==========================================
-  // 1. Shift Attendance
-  // ==========================================
-  async getActiveShift(driverId: string): Promise<DriverShift | null> {
-    const db = await getDatabase();
-    // Return the latest recorded shift for the driver by rowid (authoritative sequence)
-    const row = await db.getFirstAsync<{
-      id: string;
-      driver_id: string;
-      status: string;
-      clock_in_time: string | null;
-      clock_out_time: string | null;
-      synced: number;
-    }>(
-      `SELECT * FROM local_driver_shift 
-       WHERE driver_id = ? 
-       ORDER BY rowid DESC LIMIT 1;`,
-      [driverId]
-    );
-
-    if (!row) return null;
-
-    return {
-      id: row.id,
-      driver_id: row.driver_id,
-      status: row.status as any,
-      clock_in_time: row.clock_in_time,
-      clock_out_time: row.clock_out_time,
-      synced: Boolean(row.synced),
-    };
-  },
-
-  async saveShift(shift: DriverShift): Promise<void> {
-    const db = await getDatabase();
-    await db.runAsync(
-      `INSERT INTO local_driver_shift (
-        id, driver_id, status, clock_in_time, clock_out_time, synced
-      ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        status = excluded.status,
-        clock_in_time = excluded.clock_in_time,
-        clock_out_time = excluded.clock_out_time,
-        synced = excluded.synced;`,
-      [
-        shift.id,
-        shift.driver_id,
-        shift.status,
-        shift.clock_in_time || null,
-        shift.clock_out_time || null,
-        shift.synced ? 1 : 0,
-      ]
-    );
-  },
-
-  /**
-   * Closes all active or open shifts for the driver in local SQLite, ensuring no orphaned ON_DUTY rows remain.
-   */
-  async closeAllDriverShifts(driverId: string, clockOutTime?: string): Promise<void> {
-    const db = await getDatabase();
-    const timestamp = clockOutTime || new Date().toISOString();
-    await db.runAsync(
-      `UPDATE local_driver_shift 
-       SET status = 'OFF_DUTY',
-           clock_out_time = COALESCE(clock_out_time, ?),
-           synced = 1
-       WHERE driver_id = ? AND (status = 'ON_DUTY' OR clock_out_time IS NULL);`,
-      [timestamp, driverId]
-    );
-  },
-
-  /**
-   * Replaces a client-generated temporary shift ID with a backend-assigned ID without duplicating rows.
-   */
-  async replaceShiftId(oldId: string, newId: string): Promise<void> {
-    if (oldId === newId) return;
-    const db = await getDatabase();
-    await db.withExclusiveTransactionAsync(async (txn) => {
-      await txn.runAsync(`DELETE FROM local_driver_shift WHERE id = ?;`, [newId]);
-      await txn.runAsync(`UPDATE local_driver_shift SET id = ? WHERE id = ?;`, [newId, oldId]);
-    });
-  },
-
-  // ==========================================
-  // 2. Vehicle Telemetry & 5,000-km PM
+  // 1. Vehicle Telemetry & 5,000-km PM
   // ==========================================
   async getVehicleTelemetry(truckId?: string): Promise<VehicleTelemetry | null> {
     const db = await getDatabase();
@@ -308,21 +225,8 @@ export const driverRepository = {
   },
 
   // ==========================================
-  // 6. Sync Queue Status Synchronization
+  // 5. Sync Queue Status Synchronization
   // ==========================================
-  async markShiftSynced(idOrDriverId: string): Promise<void> {
-    const db = await getDatabase();
-    const result = await db.runAsync(`UPDATE local_driver_shift SET synced = 1 WHERE id = ?;`, [idOrDriverId]);
-    if (result.changes === 0) {
-      await db.runAsync(
-        `UPDATE local_driver_shift SET synced = 1 WHERE rowid IN (
-          SELECT rowid FROM local_driver_shift WHERE driver_id = ? ORDER BY clock_in_time DESC, rowid DESC LIMIT 1
-        );`,
-        [idOrDriverId]
-      );
-    }
-  },
-
   async markFuelLogSynced(id: string): Promise<void> {
     const db = await getDatabase();
     await db.runAsync(`UPDATE local_fuel_logs SET synced = 1 WHERE id = ?;`, [id]);

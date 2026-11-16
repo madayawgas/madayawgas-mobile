@@ -6,8 +6,6 @@ import {
   AuthSessionReason,
 } from './sessionStore';
 
-export type { AuthSessionListener, AuthSessionReason };
-
 export const authService = {
   /**
    * Subscribes to authentication session state changes.
@@ -49,6 +47,13 @@ export const authService = {
    */
   async saveSession(user: Omit<UserSession, 'token' | 'savedAt'>, token: string): Promise<UserSession> {
     return sessionStore.saveSession(user, token);
+  },
+
+  /**
+   * Updates cached user fields (e.g. avatar, name) and broadcasts to subscribers.
+   */
+  async updateUser(updatedFields: Partial<UserSession>): Promise<UserSession | null> {
+    return sessionStore.updateUser(updatedFields);
   },
 
   /**

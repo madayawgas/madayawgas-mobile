@@ -19,7 +19,34 @@ export interface ProductCatalogItem {
   isActive: boolean;
 }
 
-export type TripStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+export type TripStatus = 'PENDING' | 'IN_PROGRESS' | 'RETURNED' | 'COMPLETED' | 'CANCELLED';
+
+export interface EndTripPayload {
+  currentOdometer: number;
+  notes?: string;
+  returnTime?: string;
+}
+
+export interface EndTripResponse {
+  trip: {
+    id: string;
+    tripNumber: string;
+    status: 'RETURNED' | string;
+    truckId: string;
+    driverId: string;
+    salesUserId: string;
+    endedBy: string;
+    returnTime: string;
+    returnOdometerLogId?: string;
+    departureTime: string;
+  };
+  odometerTelemetry?: {
+    logId: string;
+    readingKm: number;
+    distanceDriven: number;
+    requiresMaintenance: boolean;
+  };
+}
 
 export interface ActiveTrip {
   trip_id: string; // UUID
@@ -119,12 +146,11 @@ export type SyncOperationType =
   | 'CREATE_ORDER'
   | 'CREATE_CUSTOMER'
   | 'ZERO_SALE_DECLARATION'
-  | 'CLOCK_IN'
-  | 'CLOCK_OUT'
   | 'LOG_FUEL'
   | 'REPORT_APPREHENSION'
   | 'REPORT_ISSUE'
-  | 'EMERGENCY_SOS';
+  | 'EMERGENCY_SOS'
+  | 'END_TRIP';
 
 export interface SyncQueueItem {
   id: string; // UUID
@@ -153,22 +179,14 @@ export interface UserSession {
   token: string;
   savedAt: string;
   mustChangePassword?: boolean;
+  avatarMediaKey?: string | null;
+  avatarUrl?: string | null;
+  birthdate?: string | null;
 }
 
 // ==========================================
 // DRIVER & VEHICLE DOMAIN MODELS
 // ==========================================
-
-export type DutyStatus = 'OFF_DUTY' | 'ON_DUTY';
-
-export interface DriverShift {
-  id: string; // UUID
-  driver_id: string;
-  status: DutyStatus;
-  clock_in_time?: string | null;
-  clock_out_time?: string | null;
-  synced: boolean;
-}
 
 export type VehicleStatus = 'ACTIVE' | 'UNDER_MAINTENANCE' | 'INACTIVE' | 'RETIRED';
 
@@ -258,5 +276,12 @@ export interface ServiceZone {
   description?: string | null;
   is_active?: boolean;
   isActive?: boolean;
+}
+
+export interface StockShortageItem {
+  productId: string;
+  productName: string;
+  requested: number;
+  available: number;
 }
 

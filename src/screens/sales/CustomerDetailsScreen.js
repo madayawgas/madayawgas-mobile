@@ -136,7 +136,7 @@ const CustomerDetailsScreen = ({ customer, activeTrip, onBack, onEdit, onAddOrde
       return canisterBalances.reduce((sum, b) => sum + (Number(b.netBalance) || 0), 0);
     }
     return rawDebt;
-  }, [activeCustomer?.canister_debt, activeCustomer?.canisterDebt, enrichedData?.totalNetCanisterDebt, canisterBalances]);
+  }, [activeCustomer, enrichedData, canisterBalances]);
 
   const createdDate = activeCustomer?.createdAt || activeCustomer?.created_at;
   const formattedCreatedDate = createdDate

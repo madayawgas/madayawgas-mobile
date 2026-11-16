@@ -36,8 +36,47 @@ export interface LoginResponseData {
     isActive: boolean;
     isBlocked: boolean;
     mustChangePassword: boolean;
+    avatarMediaKey?: string | null;
+    avatarUrl?: string | null;
   };
   token?: string; // In Dual-Auth, mobile receives token alongside cookie
+}
+
+export interface UserProfileResponseData {
+  user: {
+    id: string;
+    username: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    birthdate?: string | null;
+    role: string;
+    roleId?: string;
+    roles?: { id: string; name: string; isPrimary: boolean }[];
+    roleNames?: string[];
+    permissions?: string[];
+    isActive: boolean;
+    isBlocked: boolean;
+    mustChangePassword: boolean;
+    avatarMediaKey?: string | null;
+    avatarUrl?: string | null;
+  };
+  avatarUrl?: string | null;
+  avatarMediaKey?: string | null;
+}
+
+export interface UploadAvatarResponseData {
+  user?: UserProfileResponseData['user'];
+  avatarUrl: string;
+  avatarMediaKey: string;
+}
+
+export interface UpdateProfileRequest {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  birthdate?: string;
+  avatarMediaKey?: string | null;
 }
 
 export interface ChangePasswordRequest {

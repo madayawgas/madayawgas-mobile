@@ -9,7 +9,6 @@ import { driverApi, tripApi } from '@/api';
 import { UUID_REGEX } from '@/api/endpoints/driverApi';
 import {
   UserSession,
-  DriverShift,
   VehicleTelemetry,
   FuelLog,
   ApprehensionReport,
@@ -27,7 +26,6 @@ import { driverRealtimeManager, DriverRealtimeListener } from '@/realtime';
 
 export interface DriverDashboardContext {
   trip: ActiveTrip | null;
-  shift: DriverShift | null;
   telemetry: VehicleTelemetry;
   pendingSyncCount: number;
 }
@@ -56,20 +54,59 @@ export const driverService = {
             rawTrip.trip_number ||
             `TRIP-${tripId.substring(0, 8)}`;
           const userDisplayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.username || 'Driver';
+          const vehiclePlate =
+            rawTrip.truckPlateNumber ||
+            rawTrip.truck_plate_number ||
+            rawTrip.truck?.plateNumber ||
+            rawTrip.truck?.plate_number ||
+            rawTrip.vehiclePlate ||
+            rawTrip.vehicle_plate ||
+            'N/A';
+          const truckModel =
+            rawTrip.truckModel ||
+            rawTrip.truck_model ||
+            rawTrip.truck?.model ||
+            null;
+          const truckId =
+            rawTrip.truckId ||
+            rawTrip.truck_id ||
+            rawTrip.truck?.id ||
+            null;
+          const driverId =
+            rawTrip.driverId ||
+            rawTrip.driver_id ||
+            rawTrip.driver?.id ||
+            user.id;
+          const driverName =
+            rawTrip.driverName ||
+            rawTrip.driver_name ||
+            rawTrip.driver?.fullName ||
+            userDisplayName;
+          const salesUserName =
+            rawTrip.salesUserName ||
+            rawTrip.sales_user_name ||
+            rawTrip.salesUser?.fullName ||
+            null;
+          const zoneName =
+            rawTrip.zoneName ||
+            rawTrip.zone_name ||
+            rawTrip.zone?.name ||
+            null;
+
           activeTrip = {
             trip_id: tripId,
             trip_number: tripNumber,
-            vehicle_plate: rawTrip.truckPlateNumber || rawTrip.truck_plate_number || 'N/A',
-            driver_name: rawTrip.driverName || rawTrip.driver_name || userDisplayName,
+            vehicle_plate: vehiclePlate,
+            driver_name: driverName,
             sales_user_id: rawTrip.salesUserId || rawTrip.sales_user_id || user.id,
             zone_id: rawTrip.zoneId || rawTrip.zone_id || 'DEFAULT',
             status: rawTrip.status || 'IN_PROGRESS',
             dispatched_at: rawTrip.departureTime || rawTrip.departure_time || new Date().toISOString(),
-            truck_id: rawTrip.truckId || rawTrip.truck_id || null,
-            truck_model: rawTrip.truckModel || rawTrip.truck_model || null,
-            driver_id: rawTrip.driverId || rawTrip.driver_id || user.id,
-            sales_user_name: rawTrip.salesUserName || rawTrip.sales_user_name || null,
-            zone_name: rawTrip.zoneName || rawTrip.zone_name || null,
+            truck_id: truckId,
+            truck_model: truckModel,
+            driver_id: driverId,
+            sales_user_name: salesUserName,
+            zone_name: zoneName,
           };
           await tripRepository.saveActiveTrip(activeTrip);
         } else {
@@ -126,204 +163,14 @@ export const driverService = {
       };
     }
 
-    // 3. Fetch active shift (remote first if online to synchronize duty cycle, then local fallback)
-    let shift = await driverRepository.getActiveShift(user.id);
-    if (networkSentinel.isOnline()) {
-      try {
-        const remoteShift = await driverApi.fetchActiveShift(user.id);
-        if (remoteShift && remoteShift.status === 'ON_DUTY') {
-          await driverRepository.saveShift(remoteShift);
-          shift = remoteShift;
-        } else if (!remoteShift || remoteShift.status === 'OFF_DUTY') {
-          // Server indicates driver is off-duty.
-          // Only maintain local ON_DUTY if there is a pending offline CLOCK_IN mutation in the sync queue.
-          const hasPendingClockIn = await syncQueueRepository.hasPendingOperation(user.id, 'CLOCK_IN');
-          if (!hasPendingClockIn) {
-            // No offline clock-in waiting: server state is authoritative. Close all local shifts.
-            await driverRepository.closeAllDriverShifts(user.id);
-            await syncQueueRepository.removePendingOperations(user.id, ['CLOCK_OUT']);
-            shift = await driverRepository.getActiveShift(user.id);
-          }
-        }
-      } catch (e) {
-        console.warn('[DriverService] Remote active shift check failed, using local shift:', e);
-      }
-    }
-
-    // 4. Fetch pending sync count
+    // 3. Fetch pending sync count
     const pendingSyncCount = await syncQueueRepository.getPendingCount(user.id);
 
     return {
       trip: activeTrip,
-      shift,
       telemetry,
       pendingSyncCount,
     };
-  },
-
-  /**
-   * Clock in (Start Shift)
-   */
-  async clockIn(user: UserSession, truckId?: string): Promise<DriverShift> {
-    const shiftId = Crypto.randomUUID();
-    const now = new Date().toISOString();
-
-    const localTelem = await driverRepository.getVehicleTelemetry();
-    const activeTrip = await tripRepository.getActiveTrip();
-    const effectiveTruckId = truckId || localTelem?.truck_id || activeTrip?.truck_id || '';
-
-    // First ensure any previous unclosed shifts are marked closed so we don't have zombie rows
-    await driverRepository.closeAllDriverShifts(user.id, now);
-
-    let shift: DriverShift = {
-      id: shiftId,
-      driver_id: user.id,
-      status: 'ON_DUTY',
-      clock_in_time: now,
-      clock_out_time: null,
-      synced: false,
-    };
-
-    // Save locally immediately
-    await driverRepository.saveShift(shift);
-
-    let postedDirectly = false;
-    let openCycleAlreadyExists = false;
-
-    if (networkSentinel.isOnline()) {
-      try {
-        const resp = await driverApi.clockIn(user.id, effectiveTruckId);
-        if (resp.shiftId && resp.shiftId !== shift.id) {
-          await driverRepository.replaceShiftId(shift.id, resp.shiftId);
-          shift.id = resp.shiftId;
-        }
-        shift.synced = true;
-        await driverRepository.saveShift(shift);
-        postedDirectly = true;
-      } catch (e: any) {
-        const errMsg = e?.message || '';
-        const errCode = e?.data?.code || '';
-        if (
-          errCode === 'OPEN_DUTY_CYCLE_EXISTS' ||
-          errMsg.includes('already has an active open duty cycle')
-        ) {
-          console.log('[DriverService] User already clocked in on backend. Reconciling shift state.');
-          openCycleAlreadyExists = true;
-          try {
-            const remoteShift = await driverApi.fetchActiveShift(user.id);
-            if (remoteShift) {
-              await driverRepository.closeAllDriverShifts(user.id);
-              shift = remoteShift;
-            } else {
-              shift.synced = true;
-            }
-          } catch {
-            shift.synced = true;
-          }
-          await driverRepository.saveShift(shift);
-          postedDirectly = true;
-        } else {
-          console.warn('[DriverService] Remote clock-in failed, queued offline:', e.message);
-        }
-      }
-    }
-
-    if (!postedDirectly && !openCycleAlreadyExists) {
-      await syncQueueRepository.enqueue({
-        id: shift.id,
-        user_id: user.id,
-        operation_type: 'CLOCK_IN',
-        endpoint: '/attendance/clock-in',
-        payload: JSON.stringify({
-          userId: user.id,
-          driverId: user.id,
-          truckId: effectiveTruckId,
-          clockInTime: now,
-          timestamp: now,
-        }),
-      });
-    }
-
-    return shift;
-  },
-
-  /**
-   * Clock out (End Shift)
-   */
-  async clockOut(user: UserSession): Promise<DriverShift> {
-    const now = new Date().toISOString();
-
-    // 1. Immediately close ALL open shifts for this driver in local SQLite
-    await driverRepository.closeAllDriverShifts(user.id, now);
-
-    const existing = await driverRepository.getActiveShift(user.id);
-    const shiftId = existing?.id || Crypto.randomUUID();
-
-    const shift: DriverShift = {
-      id: shiftId,
-      driver_id: user.id,
-      status: 'OFF_DUTY',
-      clock_in_time: existing?.clock_in_time || null,
-      clock_out_time: now,
-      synced: false,
-    };
-
-    await driverRepository.saveShift(shift);
-
-    let postedDirectly = false;
-    let cycleAlreadyClosed = false;
-
-    if (networkSentinel.isOnline()) {
-      try {
-        await driverApi.clockOut(user.id, shiftId);
-        shift.synced = true;
-        await driverRepository.saveShift(shift);
-        await driverRepository.closeAllDriverShifts(user.id, now);
-        await syncQueueRepository.removePendingOperations(user.id, ['CLOCK_IN', 'CLOCK_OUT']);
-        postedDirectly = true;
-      } catch (e: any) {
-        const errMsg = e?.message || '';
-        const errCode = e?.data?.code || '';
-        if (
-          errCode === 'NO_ACTIVE_DUTY_CYCLE' ||
-          errMsg.includes('No active open duty cycle')
-        ) {
-          console.log('[DriverService] User already clocked out on backend.');
-          cycleAlreadyClosed = true;
-          shift.synced = true;
-          await driverRepository.saveShift(shift);
-          await driverRepository.closeAllDriverShifts(user.id, now);
-          await syncQueueRepository.removePendingOperations(user.id, ['CLOCK_IN', 'CLOCK_OUT']);
-          postedDirectly = true;
-        } else {
-          console.warn('[DriverService] Remote clock-out failed, queued offline:', e.message);
-        }
-      }
-    }
-
-    if (!postedDirectly && !cycleAlreadyClosed) {
-      const isShiftIdUuid = Boolean(shiftId && UUID_REGEX.test(shiftId));
-      const payload: Record<string, any> = {
-        userId: user.id,
-        driverId: user.id,
-        clockOutTime: now,
-        timestamp: now,
-      };
-      if (isShiftIdUuid) {
-        payload.attendanceId = shiftId;
-        payload.shiftId = shiftId;
-      }
-
-      await syncQueueRepository.enqueue({
-        id: Crypto.randomUUID(),
-        user_id: user.id,
-        operation_type: 'CLOCK_OUT',
-        endpoint: '/attendance/clock-out',
-        payload: JSON.stringify(payload),
-      });
-    }
-
-    return shift;
   },
 
   /**
@@ -823,6 +670,73 @@ export const driverService = {
       telemetry: telemetry || defaultTelemetry,
       fuelLogs: Array.isArray(fuelLogs) ? fuelLogs : [],
       maintenanceLogs: Array.isArray(maintenanceLogs) ? maintenanceLogs : [],
+    };
+  },
+
+  /**
+   * Ends an active delivery run upon vehicle return to plant yard with mandatory odometer reading.
+   */
+  async endTrip(
+    user: UserSession,
+    data: {
+      tripId: string;
+      currentOdometer: number;
+      notes?: string;
+    }
+  ): Promise<{ trip: any; odometerTelemetry?: any }> {
+    const currentTelemetry = await driverRepository.getVehicleTelemetry();
+    const baselineOdo = currentTelemetry?.current_odometer || 0;
+
+    // 1. Enforce monotonic odometer rule
+    if (data.currentOdometer < baselineOdo) {
+      throw new Error(
+        `Final odometer reading (${data.currentOdometer.toLocaleString()} km) cannot be less than registered vehicle odometer (${baselineOdo.toLocaleString()} km).`
+      );
+    }
+
+    const payload = {
+      currentOdometer: data.currentOdometer,
+      notes: data.notes?.trim() || undefined,
+      returnTime: new Date().toISOString(),
+    };
+
+    let remoteResult: any = null;
+    let postedDirectly = false;
+
+    if (networkSentinel.isOnline()) {
+      try {
+        remoteResult = await tripApi.endTrip(data.tripId, payload);
+        postedDirectly = true;
+      } catch (e: any) {
+        console.warn('[DriverService] Remote end trip failed, queuing offline:', e.message);
+      }
+    }
+
+    if (!postedDirectly) {
+      await syncQueueRepository.enqueue({
+        id: `end-trip-${data.tripId}-${Date.now()}`,
+        user_id: user.id,
+        operation_type: 'END_TRIP',
+        endpoint: `/trips/${data.tripId}/end`,
+        payload: JSON.stringify(payload),
+      });
+    }
+
+    // Update local SQLite active trip status to 'RETURNED'
+    await tripRepository.updateTripStatus(data.tripId, 'RETURNED');
+
+    // Update local vehicle telemetry odometer
+    const truckId = currentTelemetry?.truck_id;
+    if (truckId) {
+      await driverRepository.updateOdometer(truckId, data.currentOdometer);
+    }
+
+    return {
+      trip: remoteResult?.trip || {
+        id: data.tripId,
+        status: 'RETURNED',
+      },
+      odometerTelemetry: remoteResult?.odometerTelemetry,
     };
   },
 

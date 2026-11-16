@@ -1,5 +1,6 @@
 import { apiClient, ApiError } from '../client';
 import { LoginRequest, LoginResponseData, ChangePasswordRequest } from '@/types';
+import { sessionStore } from '@/services/sessionStore';
 
 export const authApi = {
   async login(credentials: LoginRequest): Promise<LoginResponseData> {
@@ -32,7 +33,13 @@ export const authApi = {
         method: 'GET',
         timeoutMs: 2500, // Quick timeout to never block app launch
       });
-      return res?.status === 'success' ? 'valid' : 'revoked';
+      if (res?.status === 'success') {
+        if (res?.data?.user) {
+          await sessionStore.updateUser(res.data.user);
+        }
+        return 'valid';
+      }
+      return 'revoked';
     } catch (err: any) {
       if (err instanceof ApiError && err.status === 401) {
         return 'revoked';

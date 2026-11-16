@@ -9,7 +9,6 @@ import { syncApi } from '@/api';
 import { apiClient } from '@/api/client';
 import { mediaService } from '@/services/mediaService';
 import { authService } from '@/services/authService';
-import { UUID_REGEX } from '@/api/endpoints/driverApi';
 import {
   SyncBatchRequest,
   SyncBatchCustomerPayload,
@@ -149,15 +148,6 @@ export const syncWorker = {
             }
           }
 
-          if (item.operation_type === 'CLOCK_OUT') {
-            if (payloadObj.attendanceId && !UUID_REGEX.test(payloadObj.attendanceId)) {
-              delete payloadObj.attendanceId;
-            }
-            if (payloadObj.shiftId && !UUID_REGEX.test(payloadObj.shiftId)) {
-              delete payloadObj.shiftId;
-            }
-          }
-
           if (item.operation_type === 'EMERGENCY_SOS') {
             const active = await tripRepository.getActiveTrip();
             // If local active trip is missing or doesn't match payload, strip tripId to avoid FK violations
@@ -179,14 +169,6 @@ export const syncWorker = {
             await driverRepository.markApprehensionSynced(item.id);
           } else if (item.operation_type === 'REPORT_ISSUE') {
             await driverRepository.markVehicleIssueSynced(item.id);
-          } else if (item.operation_type === 'CLOCK_IN' || item.operation_type === 'CLOCK_OUT') {
-            await driverRepository.markShiftSynced(item.id);
-            if (item.user_id) {
-              await driverRepository.markShiftSynced(item.user_id);
-              if (item.operation_type === 'CLOCK_OUT') {
-                await driverRepository.closeAllDriverShifts(item.user_id);
-              }
-            }
           }
 
           successfulQueueIds.push(item.id);
@@ -217,36 +199,6 @@ export const syncWorker = {
             } catch (retryErr: any) {
               console.warn('[SyncWorker] Retry without tripId failed:', retryErr.message);
             }
-          }
-
-          // Idempotent attendance resolution:
-          if (
-            item.operation_type === 'CLOCK_IN' &&
-            (errCode === 'OPEN_DUTY_CYCLE_EXISTS' ||
-              errMsg.includes('already has an active open duty cycle'))
-          ) {
-            console.log(`[SyncWorker] CLOCK_IN already active on server. Resolving queue item ${item.id}.`);
-            await driverRepository.markShiftSynced(item.id);
-            if (item.user_id) {
-              await driverRepository.markShiftSynced(item.user_id);
-            }
-            successfulQueueIds.push(item.id);
-            continue;
-          }
-
-          if (
-            item.operation_type === 'CLOCK_OUT' &&
-            (errCode === 'NO_ACTIVE_DUTY_CYCLE' ||
-              errMsg.includes('No active open duty cycle'))
-          ) {
-            console.log(`[SyncWorker] CLOCK_OUT already closed on server. Resolving queue item ${item.id}.`);
-            await driverRepository.markShiftSynced(item.id);
-            if (item.user_id) {
-              await driverRepository.markShiftSynced(item.user_id);
-              await driverRepository.closeAllDriverShifts(item.user_id);
-            }
-            successfulQueueIds.push(item.id);
-            continue;
           }
 
           console.warn(`[SyncWorker] Operational mutation failed (${item.operation_type}):`, err.message);

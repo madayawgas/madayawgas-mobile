@@ -118,7 +118,6 @@ export async function resetFullDatabase(): Promise<void> {
       DROP TABLE IF EXISTS local_active_trip;
       DROP TABLE IF EXISTS sync_queue;
       DROP TABLE IF EXISTS local_receipt_sequences;
-      DROP TABLE IF EXISTS local_driver_shift;
       DROP TABLE IF EXISTS local_vehicle_telemetry;
       DROP TABLE IF EXISTS local_fuel_logs;
       DROP TABLE IF EXISTS local_apprehensions;
@@ -130,7 +129,7 @@ export async function resetFullDatabase(): Promise<void> {
     await db.execAsync('PRAGMA foreign_keys = ON;');
   }
 
-  // 3. Recreate all 14 schema tables and indexes
+  // 3. Recreate all 13 schema tables and indexes
   await db.execAsync(SCHEMA_SQL);
 }
 

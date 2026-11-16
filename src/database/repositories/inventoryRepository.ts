@@ -110,12 +110,19 @@ export const inventoryRepository = {
 
   async decrementStock(productId: string, soldQty: number): Promise<void> {
     const db = await getDatabase();
-    await db.runAsync(
+    const res = await db.runAsync(
       `UPDATE local_vehicle_inventory
        SET quantity_sold = quantity_sold + ?,
            quantity_remaining = quantity_remaining - ?
-       WHERE product_id = ?;`,
-      [soldQty, soldQty, productId]
+       WHERE product_id = ? AND quantity_remaining >= ?;`,
+      [soldQty, soldQty, productId, soldQty]
     );
+    if (res.changes === 0) {
+      const err: any = new Error(
+        `INSUFFICIENT_STOCK: Cannot deduct ${soldQty} units for product ${productId}; insufficient stock on board.`
+      );
+      err.code = 'INSUFFICIENT_STOCK';
+      throw err;
+    }
   },
 };

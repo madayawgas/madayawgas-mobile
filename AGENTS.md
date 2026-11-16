@@ -32,6 +32,11 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
 
 ## Offline-First Architecture & Local Stack
 
+### SDK & Runtime Environment
+- **Expo SDK 58**: Powered by React Native 0.88.1, React 19.3.0, and Continuous Native Generation (CNG).
+- **React Compiler & New Architecture**: Default New Architecture enabled with React Compiler optimizations (`experiments.reactCompiler: true`).
+- **Dependencies Management**: All native modules strictly pinned and validated against SDK 58 via `npx expo-doctor` and `npx expo install --check`.
+
 ### Local SQLite Database (`madayawgas.db`)
 - Created and accessed asynchronously via `expo-sqlite` with **WAL mode**, foreign keys enabled, and `PRAGMA busy_timeout = 5000;` to ensure transaction concurrency resilience (`src/database/connection.ts`). In-flight promise deduplication (`activeDashboardPromise`) protects against simultaneous query locks.
 - **Core Schema Tables (`src/database/schema.ts`)**:
@@ -43,20 +48,19 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
   - `local_canister_ledger`: Append-only tracking of cylinder swaps and loaned canisters.
   - `sync_queue`: Mutation queue for store-and-forward syncing (`id`, `user_id`, `endpoint`, `operation_type`, `payload`, `status`, `retry_count`, `last_attempted_at`, `error_code`, `error_message`, `last_error`, `created_at`).
   - `local_receipt_sequences`: Sequential counters for document numbers (`INV-...` for sales, `CD-...` for canister returns).
-  - `local_driver_shift`: Active duty shift attendance (`id`, `driver_id`, `status`, `clock_in_time`, `clock_out_time`, `synced`).
   - `local_vehicle_telemetry`: Distance-based 5,000-km PM and odometer telemetry (`truck_id`, `plate_number`, `model`, `current_odometer`, `last_pm_odometer`, `status`, `last_serviced_at`).
   - `local_fuel_logs`: Fuel refills (`id`, `truck_id`, `driver_id`, `liters`, `total_cost`, `odometer`, `receipt_photo_uri`, `logged_at`, `synced`).
   - `local_apprehensions`: Roadside citations (`id`, `truck_id`, `driver_id`, `agency`, `citation_number`, `violation_notes`, `fine_amount`, `ticket_photo_uri`, `reported_at`, `synced`).
   - `local_incidents`: Breakdown/defect findings (`id`, `truck_id`, `driver_id`, `incident_type`, `description`, `severity`, `photo_uri`, `reported_at`, `synced`).
   - `local_service_zones`: Delivery service zones (`id`, `code`, `name`, `description`, `is_active`).
 - **Database Reset & Re-initialization (`resetFullDatabase()`)**:
-  - Disables foreign keys (`PRAGMA foreign_keys = OFF;`), drops all 14 local SQLite tables in reverse dependency order, re-enables foreign keys, and re-executes `SCHEMA_SQL` to return the client to a clean slate without foreign key constraint violations.
-  - Retained as a programmatic utility in `src/database/connection.ts`. Testing-only UI reset triggers have been removed from Profile screens (`DriverProfileScreen.jsx` and `ProfileScreen.js`) for the production APK build.
-  - **Explicit Logout Confirmation**: Both Driver (`DriverProfileScreen.jsx`) and Sales (`ProfileScreen.js`) profiles enforce a confirmation dialog (`Alert.alert`) before executing `onLogout`, guarding frontline operators against accidental sign-outs.
+  - Disables foreign keys (`PRAGMA foreign_keys = OFF;`), drops all 13 local SQLite tables in reverse dependency order, re-enables foreign keys, and re-executes `SCHEMA_SQL` to return the client to a clean slate without foreign key constraint violations.
+  - Retained as a programmatic utility in `src/database/connection.ts`. Testing-only UI reset triggers have been removed from Profile screens (`ProfileScreen.js`) for the production APK build.
+  - **Explicit Logout Confirmation**: The shared profile screen (`ProfileScreen.js`, utilized across both Driver and Sales roles with red danger-outline button styling) enforces a confirmation dialog (`Alert.alert`) before executing `onLogout`, guarding frontline operators against accidental sign-outs.
 
 ### Business Logic Invariants
 - **Vehicle Manifest Scoped Catalog**: Both online and offline catalog views strictly restrict displayed products to items loaded on the active trip vehicle (`local_vehicle_inventory`), preserving data integrity so sales agents cannot sell products that were not loaded onto the vehicle. When online, metadata (prices, net weights) is enriched from `productApi.fetchProductCatalog()`.
-- **Inline Frontend Stock Guard**: Visual validation in `QuantityControl.js`, `ConfirmOrderScreen.js`, and `OrderSummaryDrawer.js` prevents entering or confirming quantities greater than remaining vehicle stock (`quantity_remaining`). Exceeding stock turns the quantity pill and label red (`#ef4444`, `#dc2626`) and displays inline text `Max: X available on board` with NO popups or alert dialogs. Drawer confirmation button is disabled with label `EXCEEDS AVAILABLE STOCK`.
+- **Inline Frontend Stock Guard**: Visual validation in `QuantityControl.js`, `ProductOrderCard.js`, `ConfirmOrderScreen.js`, `SalesScreen.js`, and `OrderSummaryDrawer.js` disables selecting out-of-stock products (`quantity_remaining <= 0`), caps default quantities to available stock, and blocks entering or confirming quantities greater than remaining vehicle stock (`quantity_remaining`). Exceeding stock turns the quantity pill and label red (`#ef4444`, `#dc2626`) with inline text `Max: X available on board`, disables drawer confirmation (`EXCEEDS AVAILABLE STOCK`), and displays an `Insufficient Stock` alert on confirmation attempts.
 - **Append-Only Canister Debt & Receivables Model (`salesService.ts`, `customerRepository.ts`, `local_canister_ledger`)**:
   When a customer purchases gas products or returns empties:
   ```
@@ -66,7 +70,7 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
   new_customer_debt = max(0, current_customer_debt + sum(net_balance_change))
   ```
   Every canister loan or return is recorded per SKU in `local_canister_ledger`. Outstanding receivables for each product reflect the net cylinders on loan (total loaned - total returned). Newly purchased products immediately record positive net balance changes and appear in the customer's Canister Receivables SKU breakdown. In `CustomerDetailsScreen`, local SQLite canister ledger records seamlessly overlay with server balances, adding pending changes without duplicate counts.
-- **Permissive Selling Policy**: If the sales agent sells more stock than local inventory records show as remaining on board, warn the user but **ALLOW** the sale to proceed. Cash flow in the field takes precedence; discrepancies reconcile at the evening plant dock.
+- **Strict Stock Enforcement Policy (`INSUFFICIENT_STOCK`)**: Selling quantities that exceed `local_vehicle_inventory.quantity_remaining` is strictly blocked across all layers to preserve post-trip plant reconciliation integrity and prevent negative inventory variances (`FLAGGED_VARIANCE`). `salesService.processSale` validates aggregated SKU quantities via `validateStockSufficiency` and throws `InsufficientStockError` (`code: 'INSUFFICIENT_STOCK'`); `salesService.createOrder` returns `{ success: false, code: 'INSUFFICIENT_STOCK', ... }`; `local_vehicle_inventory` enforces `CHECK (quantity_remaining >= 0)` in `schema.ts`; and `salesRepository.createAtomicSale` / `inventoryRepository.decrementStock` guard updates with `WHERE product_id = ? AND quantity_remaining >= ?`. Zero-sale empty canister declarations (`quantitySold === 0`, `emptiesReturned > 0`) continue to be permitted.
 - **Monotonic Odometer Integrity**: Client-side enforcement ensuring all new odometer readings must be greater than or equal to current registered odometer (`new_odometer >= current_odometer`).
 - **Mandatory Citation Photo Proof**: Block submission of roadside apprehension reports until ticket photo proof is attached and validated.
 - **Emergency SOS Resilience & Foreign Key Self-Healing**: High-affordance cabin SOS button with current GPS coordinates and an immediate 60-second cooldown timer. Life-critical SOS signals always attempt rapid direct HTTP dispatch (`/operations/alerts`) first, falling back to `sync_queue` only if offline. Emergency alerts are never blocked by optional relational metadata (`trip_id`). If an active trip ID is unverified or rejected by PostgreSQL (`emergency_alerts_trip_id_fkey`), mobile automatically clears stale `local_active_trip`, strips `tripId`, and immediately re-dispatches with `tripId: null`. In the background sync queue, `syncWorker` purges unverified trip IDs and recovers from foreign key rejections without dropping alerts.
@@ -97,8 +101,8 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
   - **Guarded Manual Syncing**: `syncNow()` verifies backend reachability and blocks execution when offline (`offline: true`). Screen UI validates `SyncResult` counts (`synced`, `failed`) to prevent false-positive success notifications.
 - **Sync Worker (`syncWorker.ts`)**:
   - **In-Flight Mutex & SQLite Concurrency Locking**: Guarded by an in-memory lock (`isSyncing`) and an immediate SQLite status transition (`status = 'PROCESSING'`) on all picked queue rows. Tri-trigger invocations (network recovery, 30s heartbeat, manual "Sync Now") never fire duplicate network requests for identical queue rows.
-  - Operational mutations (`CLOCK_IN`, `CLOCK_OUT`, `LOG_FUEL`, `REPORT_APPREHENSION`, `REPORT_ISSUE`, `EMERGENCY_SOS`) replay directly to their designated REST endpoints (`item.endpoint`) scoped to the active user's `user_id`.
-  - Automatically checks for offline cached file URIs (`file:///`) in operational payloads, uploads the image to `/api/media/upload`, updates the payload with the storage key and remote URL, and marks the corresponding local SQLite row (`local_fuel_logs`, `local_apprehensions`, `local_incidents`, `local_driver_shift`) as `synced = 1`. If media upload fails, the mutation is kept queued for the next cycle without sending invalid local URIs to the endpoint.
+  - Operational mutations (`LOG_FUEL`, `REPORT_APPREHENSION`, `REPORT_ISSUE`, `EMERGENCY_SOS`) replay directly to their designated REST endpoints (`item.endpoint`) scoped to the active user's `user_id`.
+  - Automatically checks for offline cached file URIs (`file:///`) in operational payloads, uploads the image to `/api/media/upload`, updates the payload with the storage key and remote URL, and marks the corresponding local SQLite row (`local_fuel_logs`, `local_apprehensions`, `local_incidents`) as `synced = 1`. If media upload fails, the mutation is kept queued for the next cycle without sending invalid local URIs to the endpoint.
   - **Itemized Partial-Success Batch Ingestion & Customer Pre-Ingestion (`POST /api/sales/sync-batch`)**:
     - Gathers pending sales orders alongside offline-created customers (`is_locally_created = 1`) to satisfy foreign key relational integrity before orders are committed.
     - Handles backend itemized responses (`success`, `partial_success`, `fail`).
@@ -119,15 +123,22 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
     - **Role-Agnostic Interception Invariant**: When an admin creates an account or resets credentials, the user is issued a temporary password with `mustChangePassword: true`. In `App.js`, this flag intercepts the screen lifecycle at the root level before any role evaluation (`isDriver`) or screen dispatch (`renderActiveScreen()`). Neither Drivers nor Sales Agents can view dashboards, hydrations, or tabs until the password is changed.
     - **Sync Suppression Invariant**: Background operational sync (`syncScheduler.setActiveUser`) is withheld while `mustChangePassword === true`, preventing backend `403 MUST_CHANGE_PASSWORD` errors.
     - **Session Revocation & Clean Re-login**: The user provides a new password (min. 8 characters with confirmation match), which is dispatched to `POST /api/users/change-password`. On backend success (where `must_change_password` is updated to `false` and all active sessions are revoked), the app displays a success prompt, clears local SecureStore sessions (`authService.clearSession('logout')`), and routes the operator back to `LoginScreen` to sign in cleanly with their newly established credentials.
-- **Dynamic Truck & Driver Context Hydration (`driverService.ts`)**:
+- **Dynamic Truck & Driver Context Hydration & Trip Lifecycle (`driverService.ts`, `DriverDashboardScreen.jsx`)**:
+  - **4-Stage Operational Trip Lifecycle**:
+    `Dispatch (Supervisor) ➔ Active Trip (IN_PROGRESS) ➔ End Trip (Driver only, mandatory odometer) ➔ Reconciliation (Plant physical count & settlement)`.
+  - **Driver-Only End Trip Flow (`EndTripModal.jsx`, `driverService.endTrip`, `tripApi.endTrip`)**:
+    - Accessible directly via the primary action button on the **Active Route Delivery Hero Card** when `status === 'IN_PROGRESS'`.
+    - Opens bottom sheet modal requiring mandatory `currentOdometer` input with real-time monotonic enforcement (`currentOdometer >= baseline`).
+    - Dispatches to `POST /api/trips/:id/end` when online, or enqueues mutation `END_TRIP` into `sync_queue` if offline.
+    - Transitions trip `status` to `'RETURNED'` in local SQLite (`local_active_trip`), updates `local_vehicle_telemetry.current_odometer`, and updates UI to display the amber `RETURNED / AWAITING RECONCILIATION` badge while cleanly hiding the End Trip action.
+  - **Driver Dashboard Ergonomics & Visual Hierarchy**:
+    - High-contrast card system with generous spacing (`space-y-5`) replacing plain flat gray surfaces with elevated pure white cards (`bg-white shadow-sm border border-slate-200/90`) on a crisp canvas (`bg-slate-100`).
+    - **Separation of Concerns**: Odometer and 5,000-km PM telemetry are strictly isolated to the dedicated Vehicle tab (`DriverMaintenanceScreen.jsx`), eliminating clutter from the Cabin dashboard.
+    - **Dynamic Trip Dispatch Hero Card**: Features real-time state badge (`IN PROGRESS` vs `RETURNED`), trip number chip, 4-metric grid (Zone, Sales Partner, Departure Window, Vehicle), and a streamlined, bold single-line `End Delivery Trip` primary CTA.
+    - **Simplified Connectivity Language**: Uses clear, natural "Online" and "Offline" status copy in place of technical jargon.
+    - **Refined Quick Actions**: Re-styled `Log Fuel`, `Citation`, and `Report Defect` cards with distinct colored icon pills and concise microcopy.
   - Resolves active trip assignments via `GET /api/trips/active-assignment` and vehicle telemetry via `GET /api/fleet/my-vehicle`, caching to `local_active_trip` and `local_vehicle_telemetry`.
   - **Authoritative Trip Synchronization & Constraint Integrity**: When a driver or salesperson has no assigned active trip, backend returns `{ data: { trip: null } }`. When online, `driverService.getDashboardContext` authoritatively synchronizes this state and clears stale `local_active_trip` rows, preventing ghost trips and relational foreign key errors. If a cached trip belongs to a different driver, it is purged. When active trips exist, robust multi-layer property fallbacks (`tripNumber ?? trip_number ?? TRIP-<id>`) guarantee constraint compliance.
-  - **Duty Attendance UUID Invariants & Atomic Shift Closure (`driverRepository.ts`, `driverService.ts`)**:
-    - Frontend shift records generate valid UUIDs (`Crypto.randomUUID()`). `driverApi.clockOut` and `syncWorker` validate `attendanceId` against UUID regex (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i`), omitting the field if non-UUID to allow backend PostgreSQL to resolve active duty cycles cleanly via `userId` without UUID syntax errors.
-    - **Atomic Multi-Row Shift Closure (`closeAllDriverShifts`)**: Whenever a driver clocks out (direct HTTP, WebSocket `ATTENDANCE_DUTY_UPDATED`, or sync worker replay), all records in `local_driver_shift` matching `driver_id` where `status = 'ON_DUTY' OR clock_out_time IS NULL` are atomically updated to `status = 'OFF_DUTY'`, eliminating orphaned rows and query priority bugs.
-    - **Self-Healing Reconciliation**: On app hydration (`getDashboardContext`), if backend reports no active duty cycle (`remoteShift === null` or `OFF_DUTY`) and no offline `CLOCK_IN` is pending in `sync_queue`, client automatically invokes `closeAllDriverShifts(userId)` and purges stale attendance queue items, freeing drivers from stuck loops.
-    - **In-Place ID Replacement (`replaceShiftId`)**: Server-assigned shift IDs replace temporary client UUIDs in-place without duplicating records.
-  - **Cabin Duty Action Pending Feedback**: Start Shift and End Shift actions in `DriverDashboardScreen.jsx` are guarded by `isDutyActionPending`, displaying loading indicators and disabling buttons to prevent double submissions and UI freezes during network latency.
   - Zero hardcoded vehicle/user UUIDs in business services; dynamic fallback based on loaded trip and cache.
   - **Zero Mock Policy**: 100% of mock fixtures, dummy generators, and mock flags (`USE_MOCK`, `EXPO_PUBLIC_USE_MOCK`) are purged. All operations strictly source from live local SQLite or backend endpoints.
 - **Frontline Real-Time WebSocket Engine (`src/realtime/`)**:
@@ -137,7 +148,7 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
     - Standardized application envelope `{ event, data, meta }` with safe parsing.
     - Central listener for `AUTH_SESSION_REVOKED`: immediately terminates socket connection, invokes `authService.clearSession('revoked')`, and routes back to login.
   - **Frontline Driver Event Dispatcher (`driverRealtimeManager.ts`)**:
-    - **Live Trip Lifecycle**: Handles `TRIP_DISPATCHED`, `TRIP_LOAD_RECORDED`, `TRIP_COMPLETED`, `TRIP_CANCELLED`, and `TRIP_RECONCILED`. Automatically hydrates `local_active_trip` in SQLite and reactively updates `DriverDashboardScreen` from idle standby to active trip delivery.
+    - **Live Trip Lifecycle**: Handles `TRIP_DISPATCHED`, `TRIP_LOAD_RECORDED`, `TRIP_ENDED`, `TRIP_COMPLETED`, `TRIP_CANCELLED`, and `TRIP_RECONCILED`. Automatically hydrates `local_active_trip` in SQLite and reactively updates `DriverDashboardScreen` from idle standby to active trip delivery and returned state.
     - **Fleet Readiness & Grounding**: Handles `FLEET_VEHICLE_GROUNDED` and `FLEET_VEHICLE_RELEASED`, updating `local_vehicle_telemetry.status` in SQLite. Reactively renders or dismisses the prominent red `VEHICLE GROUNDED` exception banner in `DriverMaintenanceScreen` without pull-to-refresh.
     - **Emergency SOS Supervisor Triage**: Handles `EMERGENCY_ALERT_STATUS_UPDATED`, immediately notifying frontline drivers via alerts/prompts when supervisors acknowledge or resolve their emergency alerts.
     - **Additive Write Independence**: Sockets are strictly additive observers. All field mutations (orders, SOS alerts, shifts) persist atomically to local SQLite and `sync_queue` regardless of socket connection state.
@@ -179,7 +190,12 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
   - **3-Tab Navigation Architecture**: The Sales Agent role uses a clean 3-tab layout (**Home**, **Sales** with cart icon, and **Profile**), eliminating the redundant dummy `OrderScreen.js` and mirroring the Driver role's 3-tab layout.
   - **Customer Card Name & Identity Resolution (`CustomerCard.js`, `SalesScreen.js`)**:
     - `CustomerCard` reliably resolves customer identity through prioritized fallbacks (`customer?.business_name || customer?.name || customer?.store_name || name`), contact info (`contact_person` with contact number), customer type badges, and local creation offline indicator icons (`is_locally_created`), ensuring customer names are never blank in the directory.
-    - **Avatar Asset Architecture**: Employs lightweight static image assets (`assets/images/placeholder.png`) rather than complex SVGs with embedded base64 filters or patterns, preventing native layout clipping blowouts and blank white box rendering.
+    - **Basic Information Profile Editing & Avatar Architecture (`EditProfileModal.jsx`, `ProfileScreen.js`, `userApi.ts`, `mediaService.ts`, `mediaResolver.ts`)**:
+      - **Editable Scope**: Restricted strictly to the Basic Information section: First Name, Last Name, Birthday (`YYYY-MM-DD`), Mobile Number (`+(63) 9XX XXXX XXX`), and Avatar Photo. Account credentials (username, password, roles) and assigned vehicle details remain strictly read-only in the frontline mobile client.
+      - **URL Normalization & Mobile Resolution (`resolveMediaUrl`)**: Transparently resolves relative keys (`users/avatars/...`), relative paths (`/media/...`), development `localhost:5000` URLs, and cloud bucket URLs to the active backend origin (`ENV.API_URL`), permanently eliminating broken avatar image loads and placeholder regressions on physical mobile devices and emulators.
+      - **Immediate Local Cache Fallback & Mount Hydration**: On mount, `ProfileScreen` synchronizes live profile metadata via `GET /api/users/me` and updates `sessionStore`. Local image URIs are retained as immediate fallbacks, guaranteeing that newly chosen photos render without flickering or placeholder reversions.
+      - **Interactive Camera Badge & Dedicated Form Modal**: Tapping the avatar circle, camera badge, or "EDIT PROFILE" button opens `EditProfileModal`, which provides native square cropping (`allowsEditing: true`, `aspect: [1, 1]`), compression (max 1024px JPEG <= 5MB), and atomic persistence via `PATCH /api/users/me` and `POST /api/users/me/avatar`.
+      - **Reactive In-Session Updates**: On successful save, `sessionStore.updateUser` updates the cached session in `SecureStore` and broadcasts with reason `'update'`, immediately refreshing the avatar and basic information across the application without requiring a re-login.
   - **Floating Action Button & BottomNav Stacking Invariant (`SalesScreen.js`, `BottomNav.js`)**:
     - The floating Add Customer button in `SalesScreen` is positioned at `bottom-40` with `z-30` and `elevation: 6`, maintaining a clean 16px vertical clearance above the persistent floating `BottomNav` pill (`bottom-20 z-20`) to prevent visual or interactive overlap.
     - Customer catalog `FlatList` specifies `contentContainerStyle={{ paddingBottom: 170 }}` alongside parent `pb-0`, ensuring the terminal item can scroll completely above both `BottomNav` and the Add Customer FAB without occlusion.
@@ -262,23 +278,22 @@ Run lint and typecheck before declaring any task done.
 
 ## Navigation, Screens & Codebase Structure
 
-- **Screen Organization (`src/screens/` and `src/features/`)**:
-  - `auth/`: Pre-login screens (`LoginScreen.js`, `SplashScreen.js`).
-  - `shared/`: Screens shared across roles (`ProfileScreen.js`).
-  - `sales/`: Unified sales flow screens (`DashboardScreen.js`, `SalesScreen.js`, `CustomerScreen.js` [compat re-export], `CustomerDetailsScreen.js`, `AddCustomerScreen.js`, `NewOrderScreen.js`, `ConfirmOrderScreen.js`, `ReceiptScreen.js`). Redundant standalone `OrderScreen.js` is permanently removed.
-  - `driver/`: Driver screens (`DriverDashboardScreen.jsx`, `DriverMaintenanceScreen.jsx`, `DriverProfileScreen.jsx`).
-  - `features/`:
-    - `dashboard/screens/DriverDashboardScreen.jsx`: Shift attendance, trip status, emergency SOS with 60s cooldown, cabin quick-actions.
-    - `maintenance/screens/DriverMaintenanceScreen.jsx`: Telemetry, 5,000-km PM progress bar, grounding banner, service history, fuel refills.
-    - `profile/screens/DriverProfileScreen.jsx`: Driver credentials, truck plate & model, logout.
-    - `operations/components/`: Operational forms (`FuelEntryModal.jsx`, `ApprehensionModal.jsx`, `VehicleIssueModal.jsx`, `EmergencySosModal.jsx`).
+- **Screen Organization (`src/screens/`)**:
+  - `auth/`: Pre-login screens (`SplashScreen.js`, `LoginScreen.js`, `ChangePasswordScreen.js`).
+  - `sales/`: Unified sales flow screens (`DashboardScreen.js`, `SalesScreen.js`, `CustomerDetailsScreen.js`, `AddCustomerScreen.js`, `NewOrderScreen.js`, `ConfirmOrderScreen.js`, `ReceiptScreen.js`). Redundant stubs (`CustomerScreen.js`, `OrderScreen.js`) are permanently removed.
+  - `driver/`: Canonical driver screens (`DriverDashboardScreen.jsx`, `DriverMaintenanceScreen.jsx`, `DriverProfileScreen.jsx`). All proxy re-exports and the legacy `src/features/` directory are permanently eliminated.
+  - `shared/`: Screens shared across roles (`ProfileScreen.js` - unified profile screen with Sales User typography, role-aware BottomNav tabs, driver-specific Vehicle Information card, and consolidated Account Information).
 - **Component Organization (`src/components/`)**:
-  - `ui/`: Universal UI primitives (`FadeInView.js`, `InputField.js`, `PasswordField.js`, `PrimaryButton.js`, `ContactField.js`).
+  - `driver/`: Driver domain widgets and operational forms (`ApprehensionModal.jsx`, `EmergencySosModal.jsx`, `EndTripModal.jsx`, `FuelEntryModal.jsx`, `VehicleIssueModal.jsx`).
   - `navigation/`: Dynamic navigation components (`BottomNav.js`).
+  - `profile/`: User profile management widgets (`EditProfileModal.jsx`, `AvatarEditModal.jsx`).
   - `sales/`: Sales domain widgets (`CustomerCard.js`, `OrderSummaryDrawer.js`, `ProductOrderCard.js`, `QuantityControl.js`).
-  - `driver/`: Reserved directory for driver domain widgets.
+  - `ui/`: Universal UI primitives (`ContactField.js`, `FadeInView.js`, `InputField.js`, `PasswordField.js`, `PrimaryButton.js`).
+- **Pruned Boilerplate & Symmetrical Architecture**:
+  - All dead Expo starter template files (`animated-icon.*`, `app-tabs.*`, `themed-text.*`, `themed-view.*`, `web-badge.*`, `hint-row.*`, `collapsible.tsx`, `use-color-scheme.*`, `use-theme.ts`, `constants/theme.ts`, `src/global.css`, `scripts/reset-project.js`) and unreferenced starter assets have been permanently pruned.
+  - Symmetrical 1:1 mapping between `src/screens/<domain>` and `src/components/<domain>`.
 - **App Entry (`App.js`)**:
-  - Root coordinator managing top-level session, PaperProvider theming, and role-based screen routing (`isDriver` -> Driver Dashboard/Maintenance/Profile vs Sales Agent flow).
+  - Root coordinator managing top-level session, PaperProvider theming, and role-based screen routing (`isDriver` -> Driver Dashboard/Maintenance/Profile vs Sales Agent flow). Imports resolve directly to canonical screens in `src/screens/` with zero intermediate re-export hops.
 
 
 ---

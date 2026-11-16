@@ -5,6 +5,10 @@ import { ENV } from '@/config';
 import { authService } from './authService';
 import { networkSentinel } from '@/sync/networkSentinel';
 import { compressAndPrepareImage } from '@/utils/imageCompressor';
+import { resolveMediaUrl } from '@/utils/mediaResolver';
+import { userApi } from '@/api/endpoints/userApi';
+
+export { resolveMediaUrl };
 
 const OFFLINE_MEDIA_DIR = `${FileSystem.documentDirectory || ''}offline_media/`;
 const MEDIA_UPLOAD_TIMEOUT_MS = 6000; // 6s timeout to prevent 60s native socket hangs
@@ -22,6 +26,11 @@ export interface UploadMediaResponse {
 }
 
 export const mediaService = {
+  /**
+   * Resolves a media key or URL to a fully qualified URL for mobile rendering.
+   */
+  resolveUrl: resolveMediaUrl,
+
   /**
    * Ensures the persistent offline media directory exists.
    */
@@ -42,17 +51,18 @@ export const mediaService = {
   /**
    * Prompts the user to capture a photo via camera.
    */
-  async capturePhoto(): Promise<string | null> {
+  async capturePhoto(options?: Partial<ImagePicker.ImagePickerOptions>): Promise<string | null> {
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) {
-        throw new Error('Camera permission is required to capture ticket/receipt photos.');
+        throw new Error('Camera permission is required to capture photos.');
       }
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
         allowsEditing: false,
         quality: 1, // Full resolution input for compression pipeline
+        ...options,
       });
 
       if (result.canceled || !result.assets || result.assets.length === 0) {
@@ -69,7 +79,7 @@ export const mediaService = {
   /**
    * Prompts the user to select an existing photo from the gallery.
    */
-  async pickFromGallery(): Promise<string | null> {
+  async pickFromGallery(options?: Partial<ImagePicker.ImagePickerOptions>): Promise<string | null> {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
@@ -80,6 +90,7 @@ export const mediaService = {
         mediaTypes: ['images'],
         allowsEditing: false,
         quality: 1,
+        ...options,
       });
 
       if (result.canceled || !result.assets || result.assets.length === 0) {
@@ -91,6 +102,41 @@ export const mediaService = {
       console.error('[MediaService] Gallery pick failed:', error);
       throw error;
     }
+  },
+
+  /**
+   * Captures or picks an image specifically for user profile avatars:
+   * Enforces square aspect ratio ([1, 1]) and compresses to max 1024px JPEG.
+   */
+  async pickAndCompressAvatar(source: 'camera' | 'gallery'): Promise<string | null> {
+    const rawUri =
+      source === 'camera'
+        ? await this.capturePhoto({ allowsEditing: true, aspect: [1, 1], quality: 0.9 })
+        : await this.pickFromGallery({ allowsEditing: true, aspect: [1, 1], quality: 0.9 });
+
+    if (!rawUri) return null;
+
+    // Compress to 1024px maximum dimension with 0.85 initial quality
+    const compressed = await compressAndPrepareImage(rawUri, {
+      maxDimension: 1024,
+      quality: 0.85,
+    });
+
+    return compressed.uri;
+  },
+
+  /**
+   * Uploads an avatar image directly to the user profile avatar endpoint.
+   */
+  async uploadAvatar(localUri: string) {
+    return userApi.uploadAvatar(localUri);
+  },
+
+  /**
+   * Removes current user's profile avatar.
+   */
+  async deleteAvatar() {
+    return userApi.deleteAvatar();
   },
 
   /**

@@ -2,12 +2,13 @@ import { socketClient } from './socketClient';
 import { tripRepository, driverRepository, inventoryRepository } from '@/database';
 import { tripApi, driverApi } from '@/api';
 import { authService } from '@/services/authService';
-import { DriverShift, VehicleTelemetry } from '@/types';
+import { VehicleTelemetry } from '@/types';
 
 export type DriverRealtimeEventType =
   | 'TRIP_DISPATCHED'
   | 'TRIP_LOAD_RECORDED'
   | 'VEHICLE_STOCK_UPDATED'
+  | 'TRIP_ENDED'
   | 'TRIP_COMPLETED'
   | 'TRIP_CANCELLED'
   | 'TRIP_RECONCILED'
@@ -16,7 +17,6 @@ export type DriverRealtimeEventType =
   | 'FLEET_VEHICLE_GROUNDED'
   | 'FLEET_VEHICLE_RELEASED'
   | 'VEHICLE_STATUS_UPDATED'
-  | 'ATTENDANCE_DUTY_UPDATED'
   | 'EMERGENCY_ALERT_STATUS_UPDATED'
   | 'APPREHENSION_STATUS_UPDATED';
 
@@ -109,6 +109,21 @@ class DriverRealtimeManager {
         console.warn('[DriverRealtime] Error updating stock on VEHICLE_STOCK_UPDATED:', e);
       }
       this.notifyListeners('VEHICLE_STOCK_UPDATED', data);
+    });
+
+    this.bindEvent('TRIP_ENDED', async (data) => {
+      console.log('[DriverRealtime] TRIP_ENDED received:', data?.tripNumber);
+      try {
+        const active = await tripRepository.getActiveTrip();
+        if (!data?.tripId || active?.trip_id === data.tripId) {
+          if (active?.trip_id) {
+            await tripRepository.updateTripStatus(active.trip_id, 'RETURNED');
+          }
+        }
+      } catch (e) {
+        console.warn('[DriverRealtime] Error handling trip ended:', e);
+      }
+      this.notifyListeners('TRIP_ENDED', data);
     });
 
     this.bindEvent('TRIP_COMPLETED', async (data) => {
@@ -226,49 +241,7 @@ class DriverRealtimeManager {
       this.notifyListeners('VEHICLE_STATUS_UPDATED', data);
     });
 
-    // 3. Duty Attendance Events
-    this.bindEvent('ATTENDANCE_DUTY_UPDATED', async (data) => {
-      console.log('[DriverRealtime] ATTENDANCE_DUTY_UPDATED received:', data?.status || data?.type);
-      try {
-        const session = await authService.getSession();
-        const targetUserId = data?.userId || session?.id;
-        if (!data?.userId || data.userId === session?.id) {
-          const isOnDuty =
-            data?.status === 'ON_DUTY' ||
-            data?.status === 'ACTIVE' ||
-            data?.type === 'CLOCK_IN';
-
-          if (isOnDuty) {
-            const shift: DriverShift = {
-              id: data?.attendanceId || `shift-${Date.now()}`,
-              driver_id: session?.id || targetUserId || '',
-              status: 'ON_DUTY',
-              clock_in_time: data?.clockInTime || data?.timestamp || new Date().toISOString(),
-              clock_out_time: null,
-              synced: true,
-            };
-            await driverRepository.saveShift(shift);
-          } else {
-            const clockOutTime =
-              data?.clockOutTime ||
-              data?.clockOut ||
-              data?.timestamp ||
-              new Date().toISOString();
-            if (session?.id) {
-              await driverRepository.closeAllDriverShifts(session.id, clockOutTime);
-            }
-            if (targetUserId && targetUserId !== session?.id) {
-              await driverRepository.closeAllDriverShifts(targetUserId, clockOutTime);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('[DriverRealtime] Error updating shift attendance from socket:', e);
-      }
-      this.notifyListeners('ATTENDANCE_DUTY_UPDATED', data);
-    });
-
-    // 4. Emergency Alert & Apprehension Events
+    // 3. Emergency Alert & Apprehension Events
     this.bindEvent('EMERGENCY_ALERT_STATUS_UPDATED', (data) => {
       console.log('[DriverRealtime] EMERGENCY_ALERT_STATUS_UPDATED received:', data?.status, 'by:', data?.acknowledgedByName);
       this.notifyListeners('EMERGENCY_ALERT_STATUS_UPDATED', data);
