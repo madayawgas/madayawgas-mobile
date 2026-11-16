@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  Modal,
   ScrollView,
   TouchableOpacity,
   TextInput,
@@ -11,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { driverService } from '@/services/driverService';
+import BottomSheetModal from '@/components/ui/BottomSheetModal';
 
 const EndTripModal = ({ visible, onClose, user, activeTrip, telemetry, onSuccess }) => {
   const [odometer, setOdometer] = useState('');
@@ -88,14 +88,14 @@ const EndTripModal = ({ visible, onClose, user, activeTrip, telemetry, onSuccess
   const isInvalid = !odometer || Boolean(validationError) || submitting;
 
   return (
-    <Modal
+    <BottomSheetModal
       visible={visible}
-      animationType="slide"
-      transparent={true}
-      onRequestClose={onClose}
+      onClose={onClose}
+      dismissible={!submitting}
+      avoidKeyboard={true}
+      backdropOpacity={0.6}
     >
-      <View className="flex-1 justify-end bg-black/60">
-        <View className="bg-white rounded-t-[32px] max-h-[90%] p-6">
+      <View className="bg-white rounded-t-[32px] p-6">
           {/* Header */}
           <View className="flex-row items-center justify-between pb-4 border-b border-gray-100">
             <View className="flex-1 mr-3">
@@ -215,9 +215,8 @@ const EndTripModal = ({ visible, onClose, user, activeTrip, telemetry, onSuccess
               )}
             </TouchableOpacity>
           </ScrollView>
-        </View>
       </View>
-    </Modal>
+    </BottomSheetModal>
   );
 };
 

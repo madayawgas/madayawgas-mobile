@@ -42,7 +42,7 @@ const DriverMaintenanceScreen = ({
 }) => {
   const [loading, setLoading] = useState(true);
   const [healthData, setHealthData] = useState(null);
-  const [activeSubTab, setActiveSubTab] = useState("pm"); // 'pm' | 'service' | 'fuel'
+  const [activeSubTab, setActiveSubTab] = useState("service"); // 'service' | 'fuel'
   const [showFuelModal, setShowFuelModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 

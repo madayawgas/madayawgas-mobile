@@ -2,14 +2,11 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  Modal,
   ScrollView,
   TouchableOpacity,
   Image,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { mediaService, resolveMediaUrl } from '@/services/mediaService';
@@ -18,6 +15,7 @@ import { authService } from '@/services/authService';
 import InputField from '@/components/ui/InputField';
 import ContactField from '@/components/ui/ContactField';
 import PrimaryButton from '@/components/ui/PrimaryButton';
+import BottomSheetModal from '@/components/ui/BottomSheetModal';
 
 const EditProfileModal = ({
   visible,
@@ -218,17 +216,14 @@ const EditProfileModal = ({
   };
 
   return (
-    <Modal
+    <BottomSheetModal
       visible={visible}
-      animationType="slide"
-      transparent={true}
-      onRequestClose={saving ? undefined : onClose}
+      onClose={onClose}
+      dismissible={!saving}
+      avoidKeyboard={true}
+      backdropOpacity={0.6}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        className="flex-1 justify-end bg-black/60"
-      >
-        <View className="bg-white rounded-t-[32px] max-h-[92%] p-6 pb-8">
+      <View className="bg-white rounded-t-[32px] p-6 pb-8">
           {/* DRAG HANDLE BAR */}
           <View className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-3" />
 
@@ -460,9 +455,8 @@ const EditProfileModal = ({
               </TouchableOpacity>
             </View>
           </ScrollView>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      </View>
+    </BottomSheetModal>
   );
 };
 

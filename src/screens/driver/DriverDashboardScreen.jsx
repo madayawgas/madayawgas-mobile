@@ -305,13 +305,13 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
             <Text className="text-xs text-slate-500 font-semibold mt-3">Loading cabin telemetry...</Text>
           </View>
         ) : (
-          <View className="px-5 -mt-6 z-10 space-y-5">
+          <View className="px-5 -mt-6 z-10">
             {/* Emergency SOS Action Button */}
             <TouchableOpacity
               onPress={() => setShowSosModal(true)}
               disabled={sosCooldown > 0}
               activeOpacity={0.88}
-              className={`py-4 px-4.5 rounded-2xl flex-row items-center justify-between shadow-sm border ${
+              className={`mb-5 py-4 px-4.5 rounded-2xl flex-row items-center justify-between shadow-sm border ${
                 sosCooldown > 0
                   ? 'bg-amber-500 border-amber-600'
                   : 'bg-red-600 border-red-700'
@@ -342,7 +342,7 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
             </TouchableOpacity>
 
             {/* Dynamic Active Trip / Dispatch Hero Card */}
-            <View className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/90">
+            <View className="mb-5 bg-white rounded-2xl p-5 shadow-sm border border-slate-200/90">
               {/* Header with State Pill */}
               <View className="flex-row justify-between items-center mb-4">
                 <View className="flex-row items-center">

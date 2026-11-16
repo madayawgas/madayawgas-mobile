@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   View,
   Text,
-  Modal,
   TouchableOpacity,
   Image,
   ActivityIndicator,
@@ -12,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { mediaService } from '@/services/mediaService';
 import { authService } from '@/services/authService';
 import PrimaryButton from '@/components/ui/PrimaryButton';
+import BottomSheetModal from '@/components/ui/BottomSheetModal';
 
 const AvatarEditModal = ({
   visible,
@@ -129,14 +129,13 @@ const AvatarEditModal = ({
   };
 
   return (
-    <Modal
+    <BottomSheetModal
       visible={visible}
-      animationType="slide"
-      transparent={true}
-      onRequestClose={handleClose}
+      onClose={handleClose}
+      dismissible={!submitting}
+      backdropOpacity={0.6}
     >
-      <View className="flex-1 justify-end bg-black/60">
-        <View className="bg-white rounded-t-[32px] p-6 pb-8">
+      <View className="bg-white rounded-t-[32px] p-6 pb-8">
           {/* DRAG HANDLE BAR */}
           <View className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-4" />
 
@@ -321,9 +320,8 @@ const AvatarEditModal = ({
               )}
             </View>
           )}
-        </View>
       </View>
-    </Modal>
+    </BottomSheetModal>
   );
 };
 

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image, Alert, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import QuantityControl from '../../components/sales/QuantityControl';
 import OrderSummaryDrawer from '../../components/sales/OrderSummaryDrawer';
 import FadeInView from '../../components/ui/FadeInView';
+import BottomSheetModal from '../../components/ui/BottomSheetModal';
 import { useBackHandler } from '../../hooks/useBackHandler';
 
 const ConfirmOrderScreen = ({
@@ -446,14 +447,13 @@ const ConfirmOrderScreen = ({
           </ScrollView>
 
           {/* Modal: Quick Add Product from Catalog */}
-          <Modal
+          <BottomSheetModal
             visible={showAddProductModal}
-            transparent={true}
-            animationType="slide"
-            onRequestClose={() => setShowAddProductModal(false)}
+            onClose={() => setShowAddProductModal(false)}
+            backdropOpacity={0.6}
+            maxHeight="80%"
           >
-            <View className="flex-1 bg-black/60 justify-end">
-              <View className="bg-white rounded-t-3xl max-h-[80%] pt-4 pb-8 px-6">
+            <View className="bg-white rounded-t-3xl max-h-[80%] pt-4 pb-8 px-6">
                 {/* Modal Header */}
                 <View className="flex-row items-center justify-between pb-3 border-b border-gray-100 mb-3">
                   <View>
@@ -534,9 +534,8 @@ const ConfirmOrderScreen = ({
                     Done
                   </Text>
                 </TouchableOpacity>
-              </View>
             </View>
-          </Modal>
+          </BottomSheetModal>
 
           {/* Draggable Bottom Sheet Drawer */}
           {products.length > 0 && (

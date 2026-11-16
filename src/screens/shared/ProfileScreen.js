@@ -165,7 +165,7 @@ const ProfileScreen = ({
         className="flex-1"
         bounces={false}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 120 }}
+        contentContainerStyle={{ paddingBottom: 180 }}
       >
         {/* HEADER */}
         <View className="relative h-[310px] w-full">

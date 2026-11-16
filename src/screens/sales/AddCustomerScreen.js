@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import InputField from '../../components/ui/InputField';
 import ContactField from '../../components/ui/ContactField';
 import PrimaryButton from '../../components/ui/PrimaryButton';
 import FadeInView from '../../components/ui/FadeInView';
+import BottomSheetModal from '../../components/ui/BottomSheetModal';
 import { zoneRepository } from '../../database';
 import { useBackHandler } from '../../hooks/useBackHandler';
 
@@ -360,14 +361,13 @@ const AddCustomerScreen = ({ activeTrip, initialCustomer, onBack, onSubmit }) =>
       </FadeInView>
 
       {/* Zone Picker Modal */}
-      <Modal
+      <BottomSheetModal
         visible={showZonePicker}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowZonePicker(false)}
+        onClose={() => setShowZonePicker(false)}
+        backdropOpacity={0.5}
+        maxHeight="75%"
       >
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-3xl p-6 max-h-[75%] shadow-xl">
+        <View className="bg-white rounded-t-3xl p-6 max-h-[75%] shadow-xl">
             {/* Modal Header */}
             <View className="flex-row items-center justify-between pb-4 border-b border-gray-100 mb-3">
               <View>
@@ -433,9 +433,8 @@ const AddCustomerScreen = ({ activeTrip, initialCustomer, onBack, onSubmit }) =>
                 );
               })}
             </ScrollView>
-          </View>
         </View>
-      </Modal>
+      </BottomSheetModal>
     </SafeAreaView>
   );
 };

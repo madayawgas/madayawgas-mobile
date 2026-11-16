@@ -1,6 +1,6 @@
 import './global.css';
 import React, { useState, useEffect, useRef } from 'react';
-import { StatusBar, Alert, BackHandler, ToastAndroid, Platform } from 'react-native';
+import { StatusBar, Alert, BackHandler, ToastAndroid, Platform, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import SplashScreen from './src/screens/auth/SplashScreen';
 import LoginScreen from './src/screens/auth/LoginScreen';
@@ -263,26 +263,28 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <PaperProvider theme={paperTheme}>
-        <StatusBar
-          backgroundColor={user ? "#0d4761" : (isReady ? "#ffffff" : "#0d4761")}
-          barStyle={isReady && !user ? "dark-content" : "light-content"}
-        />
-        {!isReady ? (
-          <SplashScreen />
-        ) : !user ? (
-          <FadeInView key="login">
-            <LoginScreen onLogin={handleLogin} />
-          </FadeInView>
-        ) : user.mustChangePassword ? (
-          <FadeInView key="change-password">
-            <ChangePasswordScreen
-              user={user}
-              onLogout={handleLogout}
-            />
-          </FadeInView>
-        ) : (
-          renderActiveScreen()
-        )}
+        <View style={{ flex: 1, backgroundColor: '#f1f5f9' }}>
+          <StatusBar
+            backgroundColor={user ? "#0d4761" : (isReady ? "#ffffff" : "#0d4761")}
+            barStyle={isReady && !user ? "dark-content" : "light-content"}
+          />
+          {!isReady ? (
+            <SplashScreen />
+          ) : !user ? (
+            <FadeInView key="login">
+              <LoginScreen onLogin={handleLogin} />
+            </FadeInView>
+          ) : user.mustChangePassword ? (
+            <FadeInView key="change-password">
+              <ChangePasswordScreen
+                user={user}
+                onLogout={handleLogout}
+              />
+            </FadeInView>
+          ) : (
+            renderActiveScreen()
+          )}
+        </View>
       </PaperProvider>
     </SafeAreaProvider>
   );

@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  Modal,
   ScrollView,
   TouchableOpacity,
   TextInput,
@@ -13,6 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { driverService } from '@/services/driverService';
 import { mediaService } from '@/services/mediaService';
+import BottomSheetModal from '@/components/ui/BottomSheetModal';
 
 const AGENCIES = ['CTTMO', 'LTO', 'PNP', 'OTHER'];
 
@@ -106,14 +106,13 @@ const ApprehensionModal = ({ visible, onClose, user, telemetry, onSuccess }) => 
   };
 
   return (
-    <Modal
+    <BottomSheetModal
       visible={visible}
-      animationType="slide"
-      transparent={true}
-      onRequestClose={onClose}
+      onClose={onClose}
+      dismissible={!submitting}
+      backdropOpacity={0.6}
     >
-      <View className="flex-1 justify-end bg-black/60">
-        <View className="bg-white rounded-t-[32px] max-h-[90%] p-6">
+      <View className="bg-white rounded-t-[32px] p-6">
           {/* Header */}
           <View className="flex-row items-center justify-between pb-4 border-b border-gray-100">
             <View>
@@ -285,9 +284,8 @@ const ApprehensionModal = ({ visible, onClose, user, telemetry, onSuccess }) => 
               )}
             </TouchableOpacity>
           </ScrollView>
-        </View>
       </View>
-    </Modal>
+    </BottomSheetModal>
   );
 };
 
