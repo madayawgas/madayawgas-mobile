@@ -60,7 +60,7 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
 
 ### Business Logic Invariants
 - **Vehicle Manifest Scoped Catalog**: Both online and offline catalog views strictly restrict displayed products to items loaded on the active trip vehicle (`local_vehicle_inventory`), preserving data integrity so sales agents cannot sell products that were not loaded onto the vehicle. When online, metadata (prices, net weights) is enriched from `productApi.fetchProductCatalog()`.
-- **Inline Frontend Stock Guard**: Visual validation in `QuantityControl.js`, `ConfirmOrderScreen.js`, and `OrderSummaryDrawer.js` prevents entering or confirming quantities greater than remaining vehicle stock (`quantity_remaining`). Exceeding stock turns the quantity pill and label red (`#ef4444`, `#dc2626`) and displays inline text `Max: X available on board` with NO popups or alert dialogs. Drawer confirmation button is disabled with label `EXCEEDS AVAILABLE STOCK`.
+- **Inline Frontend Stock Guard**: Visual validation in `QuantityControl.js`, `ProductOrderCard.js`, `ConfirmOrderScreen.js`, `SalesScreen.js`, and `OrderSummaryDrawer.js` disables selecting out-of-stock products (`quantity_remaining <= 0`), caps default quantities to available stock, and blocks entering or confirming quantities greater than remaining vehicle stock (`quantity_remaining`). Exceeding stock turns the quantity pill and label red (`#ef4444`, `#dc2626`) with inline text `Max: X available on board`, disables drawer confirmation (`EXCEEDS AVAILABLE STOCK`), and displays an `Insufficient Stock` alert on confirmation attempts.
 - **Append-Only Canister Debt & Receivables Model (`salesService.ts`, `customerRepository.ts`, `local_canister_ledger`)**:
   When a customer purchases gas products or returns empties:
   ```
@@ -70,7 +70,7 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
   new_customer_debt = max(0, current_customer_debt + sum(net_balance_change))
   ```
   Every canister loan or return is recorded per SKU in `local_canister_ledger`. Outstanding receivables for each product reflect the net cylinders on loan (total loaned - total returned). Newly purchased products immediately record positive net balance changes and appear in the customer's Canister Receivables SKU breakdown. In `CustomerDetailsScreen`, local SQLite canister ledger records seamlessly overlay with server balances, adding pending changes without duplicate counts.
-- **Permissive Selling Policy**: If the sales agent sells more stock than local inventory records show as remaining on board, warn the user but **ALLOW** the sale to proceed. Cash flow in the field takes precedence; discrepancies reconcile at the evening plant dock.
+- **Strict Stock Enforcement Policy (`INSUFFICIENT_STOCK`)**: Selling quantities that exceed `local_vehicle_inventory.quantity_remaining` is strictly blocked across all layers to preserve post-trip plant reconciliation integrity and prevent negative inventory variances (`FLAGGED_VARIANCE`). `salesService.processSale` validates aggregated SKU quantities via `validateStockSufficiency` and throws `InsufficientStockError` (`code: 'INSUFFICIENT_STOCK'`); `salesService.createOrder` returns `{ success: false, code: 'INSUFFICIENT_STOCK', ... }`; `local_vehicle_inventory` enforces `CHECK (quantity_remaining >= 0)` in `schema.ts`; and `salesRepository.createAtomicSale` / `inventoryRepository.decrementStock` guard updates with `WHERE product_id = ? AND quantity_remaining >= ?`. Zero-sale empty canister declarations (`quantitySold === 0`, `emptiesReturned > 0`) continue to be permitted.
 - **Monotonic Odometer Integrity**: Client-side enforcement ensuring all new odometer readings must be greater than or equal to current registered odometer (`new_odometer >= current_odometer`).
 - **Mandatory Citation Photo Proof**: Block submission of roadside apprehension reports until ticket photo proof is attached and validated.
 - **Emergency SOS Resilience & Foreign Key Self-Healing**: High-affordance cabin SOS button with current GPS coordinates and an immediate 60-second cooldown timer. Life-critical SOS signals always attempt rapid direct HTTP dispatch (`/operations/alerts`) first, falling back to `sync_queue` only if offline. Emergency alerts are never blocked by optional relational metadata (`trip_id`). If an active trip ID is unverified or rejected by PostgreSQL (`emergency_alerts_trip_id_fkey`), mobile automatically clears stale `local_active_trip`, strips `tripId`, and immediately re-dispatches with `tripId: null`. In the background sync queue, `syncWorker` purges unverified trip IDs and recovers from foreign key rejections without dropping alerts.
@@ -190,7 +190,12 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
   - **3-Tab Navigation Architecture**: The Sales Agent role uses a clean 3-tab layout (**Home**, **Sales** with cart icon, and **Profile**), eliminating the redundant dummy `OrderScreen.js` and mirroring the Driver role's 3-tab layout.
   - **Customer Card Name & Identity Resolution (`CustomerCard.js`, `SalesScreen.js`)**:
     - `CustomerCard` reliably resolves customer identity through prioritized fallbacks (`customer?.business_name || customer?.name || customer?.store_name || name`), contact info (`contact_person` with contact number), customer type badges, and local creation offline indicator icons (`is_locally_created`), ensuring customer names are never blank in the directory.
-    - **Avatar Asset Architecture**: Employs lightweight static image assets (`assets/images/placeholder.png`) rather than complex SVGs with embedded base64 filters or patterns, preventing native layout clipping blowouts and blank white box rendering.
+    - **Basic Information Profile Editing & Avatar Architecture (`EditProfileModal.jsx`, `ProfileScreen.js`, `userApi.ts`, `mediaService.ts`, `mediaResolver.ts`)**:
+      - **Editable Scope**: Restricted strictly to the Basic Information section: First Name, Last Name, Birthday (`YYYY-MM-DD`), Mobile Number (`+(63) 9XX XXXX XXX`), and Avatar Photo. Account credentials (username, password, roles) and assigned vehicle details remain strictly read-only in the frontline mobile client.
+      - **URL Normalization & Mobile Resolution (`resolveMediaUrl`)**: Transparently resolves relative keys (`users/avatars/...`), relative paths (`/media/...`), development `localhost:5000` URLs, and cloud bucket URLs to the active backend origin (`ENV.API_URL`), permanently eliminating broken avatar image loads and placeholder regressions on physical mobile devices and emulators.
+      - **Immediate Local Cache Fallback & Mount Hydration**: On mount, `ProfileScreen` synchronizes live profile metadata via `GET /api/users/me` and updates `sessionStore`. Local image URIs are retained as immediate fallbacks, guaranteeing that newly chosen photos render without flickering or placeholder reversions.
+      - **Interactive Camera Badge & Dedicated Form Modal**: Tapping the avatar circle, camera badge, or "EDIT PROFILE" button opens `EditProfileModal`, which provides native square cropping (`allowsEditing: true`, `aspect: [1, 1]`), compression (max 1024px JPEG <= 5MB), and atomic persistence via `PATCH /api/users/me` and `POST /api/users/me/avatar`.
+      - **Reactive In-Session Updates**: On successful save, `sessionStore.updateUser` updates the cached session in `SecureStore` and broadcasts with reason `'update'`, immediately refreshing the avatar and basic information across the application without requiring a re-login.
   - **Floating Action Button & BottomNav Stacking Invariant (`SalesScreen.js`, `BottomNav.js`)**:
     - The floating Add Customer button in `SalesScreen` is positioned at `bottom-40` with `z-30` and `elevation: 6`, maintaining a clean 16px vertical clearance above the persistent floating `BottomNav` pill (`bottom-20 z-20`) to prevent visual or interactive overlap.
     - Customer catalog `FlatList` specifies `contentContainerStyle={{ paddingBottom: 170 }}` alongside parent `pb-0`, ensuring the terminal item can scroll completely above both `BottomNav` and the Add Customer FAB without occlusion.
@@ -273,23 +278,22 @@ Run lint and typecheck before declaring any task done.
 
 ## Navigation, Screens & Codebase Structure
 
-- **Screen Organization (`src/screens/` and `src/features/`)**:
-  - `auth/`: Pre-login screens (`LoginScreen.js`, `SplashScreen.js`).
+- **Screen Organization (`src/screens/`)**:
+  - `auth/`: Pre-login screens (`SplashScreen.js`, `LoginScreen.js`, `ChangePasswordScreen.js`).
+  - `sales/`: Unified sales flow screens (`DashboardScreen.js`, `SalesScreen.js`, `CustomerDetailsScreen.js`, `AddCustomerScreen.js`, `NewOrderScreen.js`, `ConfirmOrderScreen.js`, `ReceiptScreen.js`). Redundant stubs (`CustomerScreen.js`, `OrderScreen.js`) are permanently removed.
+  - `driver/`: Canonical driver screens (`DriverDashboardScreen.jsx`, `DriverMaintenanceScreen.jsx`, `DriverProfileScreen.jsx`). All proxy re-exports and the legacy `src/features/` directory are permanently eliminated.
   - `shared/`: Screens shared across roles (`ProfileScreen.js` - unified profile screen with Sales User typography, role-aware BottomNav tabs, driver-specific Vehicle Information card, and consolidated Account Information).
-  - `sales/`: Unified sales flow screens (`DashboardScreen.js`, `SalesScreen.js`, `CustomerScreen.js` [compat re-export], `CustomerDetailsScreen.js`, `AddCustomerScreen.js`, `NewOrderScreen.js`, `ConfirmOrderScreen.js`, `ReceiptScreen.js`). Redundant standalone `OrderScreen.js` is permanently removed.
-  - `driver/`: Driver screens (`DriverDashboardScreen.jsx`, `DriverMaintenanceScreen.jsx`, `DriverProfileScreen.jsx`).
-  - `features/`:
-    - `dashboard/screens/DriverDashboardScreen.jsx`: Trip status, emergency SOS with 60s cooldown, cabin quick-actions.
-    - `maintenance/screens/DriverMaintenanceScreen.jsx`: Telemetry, 5,000-km PM progress bar, grounding banner, service history, fuel refills.
-    - `profile/screens/DriverProfileScreen.jsx`: Delegates to the unified shared `ProfileScreen.js` with `DRIVER_TABS`.
-    - `operations/components/`: Operational forms (`FuelEntryModal.jsx`, `ApprehensionModal.jsx`, `VehicleIssueModal.jsx`, `EmergencySosModal.jsx`).
 - **Component Organization (`src/components/`)**:
-  - `ui/`: Universal UI primitives (`FadeInView.js`, `InputField.js`, `PasswordField.js`, `PrimaryButton.js`, `ContactField.js`).
+  - `driver/`: Driver domain widgets and operational forms (`ApprehensionModal.jsx`, `EmergencySosModal.jsx`, `EndTripModal.jsx`, `FuelEntryModal.jsx`, `VehicleIssueModal.jsx`).
   - `navigation/`: Dynamic navigation components (`BottomNav.js`).
+  - `profile/`: User profile management widgets (`EditProfileModal.jsx`, `AvatarEditModal.jsx`).
   - `sales/`: Sales domain widgets (`CustomerCard.js`, `OrderSummaryDrawer.js`, `ProductOrderCard.js`, `QuantityControl.js`).
-  - `driver/`: Reserved directory for driver domain widgets.
+  - `ui/`: Universal UI primitives (`ContactField.js`, `FadeInView.js`, `InputField.js`, `PasswordField.js`, `PrimaryButton.js`).
+- **Pruned Boilerplate & Symmetrical Architecture**:
+  - All dead Expo starter template files (`animated-icon.*`, `app-tabs.*`, `themed-text.*`, `themed-view.*`, `web-badge.*`, `hint-row.*`, `collapsible.tsx`, `use-color-scheme.*`, `use-theme.ts`, `constants/theme.ts`, `src/global.css`, `scripts/reset-project.js`) and unreferenced starter assets have been permanently pruned.
+  - Symmetrical 1:1 mapping between `src/screens/<domain>` and `src/components/<domain>`.
 - **App Entry (`App.js`)**:
-  - Root coordinator managing top-level session, PaperProvider theming, and role-based screen routing (`isDriver` -> Driver Dashboard/Maintenance/Profile vs Sales Agent flow).
+  - Root coordinator managing top-level session, PaperProvider theming, and role-based screen routing (`isDriver` -> Driver Dashboard/Maintenance/Profile vs Sales Agent flow). Imports resolve directly to canonical screens in `src/screens/` with zero intermediate re-export hops.
 
 
 ---

@@ -9,15 +9,25 @@ const ProductOrderCard = ({
   onPress,
   imageSource = require('../../../assets/images/placeholder.png'),
 }) => {
+  const isOutOfStock =
+    typeof item.quantityRemaining === 'number' && item.quantityRemaining <= 0;
+  const isDisabled = isOutOfStock && !isSelected;
+
   return (
     <TouchableOpacity
       onPress={onPress}
+      disabled={isDisabled}
       activeOpacity={0.85}
       style={{
         borderRadius: 28,
         borderWidth: isSelected ? 2 : 1,
         borderColor: isSelected ? '#0d4761' : '#D9D9D9',
-        backgroundColor: isSelected ? '#f0f7fa' : '#FFFFFF',
+        backgroundColor: isDisabled
+          ? '#F9FAFB'
+          : isSelected
+          ? '#f0f7fa'
+          : '#FFFFFF',
+        opacity: isDisabled ? 0.55 : 1,
         height: 250,
         overflow: 'hidden',
       }}

@@ -23,10 +23,15 @@ const ConfirmOrderScreen = ({
   const [quantities, setQuantities] = useState(() => {
     const initial = {};
     initialProducts.forEach((item) => {
-      initial[item.id] =
+      const maxStock =
+        typeof item.quantityRemaining === 'number'
+          ? Math.max(0, item.quantityRemaining)
+          : 0;
+      const desiredQty =
         initialQuantities[item.id] !== undefined && initialQuantities[item.id] > 0
           ? initialQuantities[item.id]
           : 1;
+      initial[item.id] = Math.min(desiredQty, maxStock);
     });
     return initial;
   });
@@ -45,12 +50,17 @@ const ConfirmOrderScreen = ({
     setQuantities((prev) => {
       const next = {};
       initialProducts.forEach((item) => {
-        next[item.id] =
+        const maxStock =
+          typeof item.quantityRemaining === 'number'
+            ? Math.max(0, item.quantityRemaining)
+            : 0;
+        const desiredQty =
           prev[item.id] !== undefined && prev[item.id] > 0
             ? prev[item.id]
             : initialQuantities[item.id] !== undefined && initialQuantities[item.id] > 0
             ? initialQuantities[item.id]
             : 1;
+        next[item.id] = Math.min(desiredQty, maxStock);
       });
       return next;
     });
@@ -144,13 +154,19 @@ const ConfirmOrderScreen = ({
       return;
     }
 
-    // Guard against any product exceeding remaining stock on board
+    // Strict guard against any product exceeding remaining stock on board
     const overstockedItem = products.find((item) => {
-      const max = item.quantityRemaining;
-      return typeof max === 'number' && (quantities[item.id] || 0) > max;
+      const max =
+        typeof item.quantityRemaining === 'number'
+          ? item.quantityRemaining
+          : 0;
+      return (quantities[item.id] || 0) > max;
     });
     if (overstockedItem) {
-      // Non-intrusive inline block
+      Alert.alert(
+        'Insufficient Stock',
+        `Cannot sell ${quantities[overstockedItem.id] || 0} of "${overstockedItem.name}". Only ${overstockedItem.quantityRemaining ?? 0} remaining on board.`
+      );
       return;
     }
 

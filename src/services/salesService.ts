@@ -18,6 +18,7 @@ import {
   CustomerType,
   VehicleInventory,
   ServiceZone,
+  StockShortageItem,
 } from '@/types';
 import { networkSentinel } from '@/sync/networkSentinel';
 import { syncWorker } from '@/sync/syncWorker';
@@ -46,6 +47,24 @@ export interface ProcessSaleParams {
 export interface StockValidationResult {
   hasShortage: boolean;
   warnings: string[];
+  shortages: StockShortageItem[];
+}
+
+export class InsufficientStockError extends Error {
+  code = 'INSUFFICIENT_STOCK';
+  details: StockShortageItem[];
+
+  constructor(details: StockShortageItem[]) {
+    const message = details
+      .map(
+        (d) =>
+          `Insufficient stock for "${d.productName}". Requested: ${d.requested}, Available: ${d.available}.`
+      )
+      .join('\n');
+    super(message);
+    this.name = 'InsufficientStockError';
+    this.details = details;
+  }
 }
 
 export interface SalesDashboardData {
@@ -251,34 +270,56 @@ export const salesService = {
     return activeDashboardPromise;
   },
   /**
-   * Permissive Selling Policy: Checks whether requested quantities exceed vehicle stock.
-   * Warns the Sales Agent, but never blocks field transactions.
+   * Strict Stock Enforcement Policy: Validates that requested quantities do not
+   * exceed remaining vehicle stock on board.
    */
   async validateStockSufficiency(items: SaleItemInput[]): Promise<StockValidationResult> {
     const warnings: string[] = [];
+    const shortages: StockShortageItem[] = [];
     const inventory = await inventoryRepository.getAllInventory();
 
+    const requestedByProduct = new Map<string, { productName: string; quantitySold: number }>();
     for (const item of items) {
       if (item.quantitySold <= 0) continue;
-      const stock = inventory.find((inv) => inv.product_id === item.productId);
+      const existing = requestedByProduct.get(item.productId);
+      if (existing) {
+        existing.quantitySold += item.quantitySold;
+      } else {
+        requestedByProduct.set(item.productId, {
+          productName: item.productName,
+          quantitySold: item.quantitySold,
+        });
+      }
+    }
+
+    for (const [productId, req] of requestedByProduct.entries()) {
+      const stock = inventory.find((inv) => inv.product_id === productId);
       const remaining = stock ? stock.quantity_remaining : 0;
 
-      if (item.quantitySold > remaining) {
+      if (req.quantitySold > remaining) {
+        shortages.push({
+          productId,
+          productName: req.productName,
+          requested: req.quantitySold,
+          available: remaining,
+        });
         warnings.push(
-          `Selling ${item.quantitySold} of "${item.productName}", but vehicle shows only ${remaining} remaining on board.`
+          `Insufficient stock for "${req.productName}". Requested: ${req.quantitySold}, Available: ${remaining}.`
         );
       }
     }
 
     return {
-      hasShortage: warnings.length > 0,
+      hasShortage: shortages.length > 0,
       warnings,
+      shortages,
     };
   },
 
   /**
    * Executes atomic sale or zero-sale canister declaration stop.
    * Single local SQLite transaction guaranteeing zero partial writes.
+   * Throws InsufficientStockError if any sold quantity exceeds remaining vehicle stock.
    */
   async processSale(params: ProcessSaleParams): Promise<{ order: SalesOrder; receiptNumber: string; newCustomerDebt: number }> {
     const { customerId, customerName, items, paymentMethod, paymentReference, paymentProofUri } = params;
@@ -287,6 +328,12 @@ export const salesService = {
     const activeTrip = await this.resolveActiveTripForUser(session?.id);
     if (!activeTrip || activeTrip.status !== 'IN_PROGRESS') {
       throw new Error('No active delivery trip assigned to you. You cannot make a sale without an active delivery trip.');
+    }
+
+    // Strict stock sufficiency guard before media upload, receipt numbering, or SQLite writes
+    const stockValidation = await this.validateStockSufficiency(items);
+    if (stockValidation.hasShortage) {
+      throw new InsufficientStockError(stockValidation.shortages);
     }
 
     // Process GCash payment receipt evidence if provided
@@ -848,30 +895,42 @@ export const salesService = {
       unitPrice: Number(i.price || i.unitPrice || 0),
     }));
 
-    const result = await this.processSale({
-      customerId: orderPayload.customerId,
-      customerName: orderPayload.customerName,
-      items,
-      paymentMethod: orderPayload.paymentMethod || 'CASH',
-      paymentReference: orderPayload.paymentReference,
-      paymentProofUri: orderPayload.paymentProofUri,
-    });
-
-    return {
-      success: true,
-      message: 'Order created successfully!',
-      data: {
-        orderId: result.order.id,
-        transactionNo: result.order.transaction_no,
-        receiptNumber: result.receiptNumber,
-        totalAmount: result.order.total_amount,
+    try {
+      const result = await this.processSale({
+        customerId: orderPayload.customerId,
         customerName: orderPayload.customerName,
-        status: result.order.sync_status || 'PENDING',
-        createdAt: result.order.transacted_at,
-        order: result.order,
-        newCustomerDebt: result.newCustomerDebt,
-      },
-    };
+        items,
+        paymentMethod: orderPayload.paymentMethod || 'CASH',
+        paymentReference: orderPayload.paymentReference,
+        paymentProofUri: orderPayload.paymentProofUri,
+      });
+
+      return {
+        success: true,
+        message: 'Order created successfully!',
+        data: {
+          orderId: result.order.id,
+          transactionNo: result.order.transaction_no,
+          receiptNumber: result.receiptNumber,
+          totalAmount: result.order.total_amount,
+          customerName: orderPayload.customerName,
+          status: result.order.sync_status || 'PENDING',
+          createdAt: result.order.transacted_at,
+          order: result.order,
+          newCustomerDebt: result.newCustomerDebt,
+        },
+      };
+    } catch (err: any) {
+      if (err instanceof InsufficientStockError || err?.code === 'INSUFFICIENT_STOCK') {
+        return {
+          success: false,
+          code: 'INSUFFICIENT_STOCK',
+          message: err.message,
+          details: err.details || [],
+        };
+      }
+      throw err;
+    }
   },
 
   /**

@@ -179,6 +179,9 @@ export interface UserSession {
   token: string;
   savedAt: string;
   mustChangePassword?: boolean;
+  avatarMediaKey?: string | null;
+  avatarUrl?: string | null;
+  birthdate?: string | null;
 }
 
 // ==========================================
@@ -273,5 +276,12 @@ export interface ServiceZone {
   description?: string | null;
   is_active?: boolean;
   isActive?: boolean;
+}
+
+export interface StockShortageItem {
+  productId: string;
+  productName: string;
+  requested: number;
+  available: number;
 }
 

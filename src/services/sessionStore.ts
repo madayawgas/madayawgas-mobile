@@ -5,7 +5,7 @@ import { UserSession } from '@/types';
 export const TOKEN_KEY = 'mg_session_token';
 export const USER_KEY = 'mg_session_user';
 
-export type AuthSessionReason = 'login' | 'logout' | 'revoked';
+export type AuthSessionReason = 'login' | 'logout' | 'revoked' | 'update';
 export type AuthSessionListener = (session: UserSession | null, reason?: AuthSessionReason) => void;
 
 const listeners = new Set<AuthSessionListener>();
@@ -107,6 +107,32 @@ export const sessionStore = {
     });
 
     return session;
+  },
+
+  /**
+   * Updates fields of the currently cached user session without re-authenticating.
+   * Persists changes to SecureStore and broadcasts to subscribers with reason 'update'.
+   */
+  async updateUser(partial: Partial<UserSession>): Promise<UserSession | null> {
+    const current = await this.getSession();
+    if (!current) return null;
+
+    const updated: UserSession = {
+      ...current,
+      ...partial,
+    };
+
+    await setSecureItem(USER_KEY, JSON.stringify(updated));
+
+    listeners.forEach((listener) => {
+      try {
+        listener(updated, 'update');
+      } catch (e) {
+        console.error('[SessionStore] Listener error on updateUser:', e);
+      }
+    });
+
+    return updated;
   },
 
   /**

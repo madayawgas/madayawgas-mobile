@@ -5,14 +5,20 @@ import {
   Image,
   ScrollView,
   Alert,
+  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 
 import BottomNav from '../../components/navigation/BottomNav';
 import PrimaryButton from '../../components/ui/PrimaryButton';
+import EditProfileModal from '../../components/profile/EditProfileModal';
 import ProfileBg from '../../../assets/svg/profile-bg.svg';
 import { driverRepository, tripRepository } from '../../database';
 import { driverService } from '../../services/driverService';
+import { userApi } from '../../api';
+import { authService } from '../../services/authService';
+import { resolveMediaUrl } from '../../utils/mediaResolver';
 
 const DRIVER_TABS = [
   { id: 'dashboard', label: 'Cabin', iconName: 'speedometer-outline', activeIconName: 'speedometer' },
@@ -30,6 +36,17 @@ const formatPhoneNumber = (phone) => {
   return phone;
 };
 
+const formatBirthdate = (raw) => {
+  if (!raw) return 'Not set';
+  try {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) {
+      return d.toISOString().split('T')[0];
+    }
+  } catch {}
+  return String(raw);
+};
+
 const ProfileScreen = ({
   user,
   onLogout,
@@ -42,6 +59,44 @@ const ProfileScreen = ({
   const isDriver = user?.role === 'Driver' || user?.roleNames?.includes('Driver');
   const resolvedTabs = tabs || (isDriver ? DRIVER_TABS : undefined);
   const [vehicleData, setVehicleData] = useState(vehicle || null);
+  const [currentUser, setCurrentUser] = useState(user || null);
+  const [avatarUri, setAvatarUri] = useState(resolveMediaUrl(user?.avatarUrl) || null);
+  const [imageError, setImageError] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+
+  // Sync when parent user prop updates
+  useEffect(() => {
+    if (user) {
+      setCurrentUser(user);
+      const resolved = resolveMediaUrl(user.avatarUrl);
+      setAvatarUri(resolved);
+      setImageError(false);
+    }
+  }, [user]);
+
+  // Hydrate latest profile from backend on mount
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLatestProfile = async () => {
+      try {
+        const res = await userApi.getProfile();
+        if (isMounted && res?.user) {
+          setCurrentUser(res.user);
+          const resolved = resolveMediaUrl(res.user.avatarUrl);
+          setAvatarUri(resolved);
+          setImageError(false);
+          await authService.updateUser(res.user);
+        }
+      } catch (err) {
+        console.log('[ProfileScreen] Could not fetch remote profile on mount, using cached user:', err?.message || err);
+      }
+    };
+
+    fetchLatestProfile();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (vehicle) {
@@ -85,10 +140,10 @@ const ProfileScreen = ({
   }, [isDriver, vehicle]);
 
   const fullName =
-    [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'N/A';
-  const birthdate = user?.birthdate || 'DD/MM/YYYY';
-  const username = user?.username || 'N/A';
-  const phone = formatPhoneNumber(user?.phone);
+    [currentUser?.firstName, currentUser?.lastName].filter(Boolean).join(' ') || 'N/A';
+  const birthdate = formatBirthdate(currentUser?.birthdate);
+  const username = currentUser?.username || 'N/A';
+  const phone = formatPhoneNumber(currentUser?.phone);
   const handleLogoutPress = () => {
     Alert.alert(
       'Log Out',
@@ -145,25 +200,63 @@ const ProfileScreen = ({
 
           {/* PROFILE IMAGE */}
           <View className="absolute left-0 right-0 top-[140px] z-10 items-center">
-            <View
-              style={{
-                height: 110,
-                width: 110,
-                borderRadius: 55,
-                backgroundColor: '#333333',
-                borderWidth: 4,
-                borderColor: '#FFFFFF',
-                overflow: 'hidden',
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setShowEditModal(true)}
+              style={{ position: 'relative' }}
             >
-              <Image
-                source={require('../../../assets/images/placeholder.png')}
-                style={{ height: '100%', width: '100%' }}
-                resizeMode="cover"
-              />
-            </View>
+              <View
+                style={{
+                  height: 110,
+                  width: 110,
+                  borderRadius: 55,
+                  backgroundColor: '#333333',
+                  borderWidth: 4,
+                  borderColor: '#FFFFFF',
+                  overflow: 'hidden',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}
+              >
+                <Image
+                  source={
+                    avatarUri && !imageError
+                      ? { uri: avatarUri }
+                      : require('../../../assets/images/placeholder.png')
+                  }
+                  style={{ height: '100%', width: '100%' }}
+                  resizeMode="cover"
+                  onError={() => {
+                    console.log('[ProfileScreen] Remote avatar error, falling back to placeholder');
+                    setImageError(true);
+                  }}
+                />
+              </View>
+
+              {/* CAMERA BADGE AFFORDANCE */}
+              <View
+                style={{
+                  position: 'absolute',
+                  bottom: 2,
+                  right: 2,
+                  backgroundColor: '#0d4761',
+                  borderRadius: 18,
+                  width: 34,
+                  height: 34,
+                  borderWidth: 3,
+                  borderColor: '#FFFFFF',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  elevation: 4,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.25,
+                  shadowRadius: 3,
+                }}
+              >
+                <Ionicons name="camera" size={17} color="#FFFFFF" />
+              </View>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -255,7 +348,7 @@ const ProfileScreen = ({
               variant="outline"
               borderColor="border-[#DFE8EF]"
               textSize="text-base"
-              onPress={onEditProfile || (() => {})}
+              onPress={onEditProfile || (() => setShowEditModal(true))}
             />
 
             <PrimaryButton
@@ -270,6 +363,19 @@ const ProfileScreen = ({
 
       {/* Floating Bottom Nav */}
       <BottomNav activeTab={activeTab} onSelectTab={onSelectTab} tabs={resolvedTabs} />
+
+      {/* Edit Profile Modal (Basic Information: Name, Birthday, Mobile No, Avatar) */}
+      <EditProfileModal
+        visible={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        user={currentUser}
+        onProfileUpdated={(updated) => {
+          setCurrentUser(updated);
+          const resolved = resolveMediaUrl(updated.avatarUrl);
+          setAvatarUri(resolved);
+          setImageError(false);
+        }}
+      />
     </View>
   );
 };

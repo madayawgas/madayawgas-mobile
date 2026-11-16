@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS local_vehicle_inventory (
   product_name TEXT NOT NULL,
   quantity_loaded INTEGER NOT NULL DEFAULT 0,
   quantity_sold INTEGER NOT NULL DEFAULT 0,
-  quantity_remaining INTEGER NOT NULL DEFAULT 0
+  quantity_remaining INTEGER NOT NULL DEFAULT 0 CHECK (quantity_remaining >= 0)
 );
 
 -- 3. Customer Directory & Running Canister Debt Ledger

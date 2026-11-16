@@ -124,15 +124,22 @@ export const salesRepository = {
         );
       }
 
-      // 4. Decrement Remaining Truck Inventory
+      // 4. Decrement Remaining Truck Inventory (strictly guarded against negative stock)
       for (const ded of inventoryDeductions) {
-        await txn.runAsync(
+        const res = await txn.runAsync(
           `UPDATE local_vehicle_inventory
            SET quantity_sold = quantity_sold + ?,
                quantity_remaining = quantity_remaining - ?
-           WHERE product_id = ?;`,
-          [ded.quantitySold, ded.quantitySold, ded.productId]
+           WHERE product_id = ? AND quantity_remaining >= ?;`,
+          [ded.quantitySold, ded.quantitySold, ded.productId, ded.quantitySold]
         );
+        if (res.changes === 0) {
+          const err: any = new Error(
+            `INSUFFICIENT_STOCK: Cannot deduct ${ded.quantitySold} units for product ${ded.productId}; insufficient stock on board.`
+          );
+          err.code = 'INSUFFICIENT_STOCK';
+          throw err;
+        }
       }
 
       // 5. Update Customer Canister Debt Balance

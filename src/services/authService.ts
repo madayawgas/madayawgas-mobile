@@ -50,6 +50,13 @@ export const authService = {
   },
 
   /**
+   * Updates cached user fields (e.g. avatar, name) and broadcasts to subscribers.
+   */
+  async updateUser(updatedFields: Partial<UserSession>): Promise<UserSession | null> {
+    return sessionStore.updateUser(updatedFields);
+  },
+
+  /**
    * Clears the current persistent session.
    * Accepts an optional reason: 'logout' (default) or 'revoked' (when 401 is received from backend).
    * Revocation calls are debounced to prevent duplicate alerts from concurrent requests.

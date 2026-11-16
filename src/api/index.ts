@@ -6,4 +6,5 @@ export * from './endpoints/productApi';
 export * from './endpoints/syncApi';
 export * from './endpoints/driverApi';
 export * from './endpoints/scheduleApi';
+export * from './endpoints/userApi';
 

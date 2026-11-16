@@ -264,6 +264,11 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
         });
 
         setSubStep('receipt');
+      } else if (result?.code === 'INSUFFICIENT_STOCK') {
+        Alert.alert(
+          'Insufficient Stock',
+          result.message || 'Order quantity exceeds available stock on board.'
+        );
       } else {
         Alert.alert('Order Failed', result?.message || 'Could not record sale.');
       }
@@ -379,12 +384,18 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
           setOrderQuantities((prev) => {
             const next = {};
             productIds.forEach((id) => {
-              next[id] =
+              const product = allProducts.find((p) => p.id === id);
+              const maxStock =
+                typeof product?.quantityRemaining === 'number'
+                  ? Math.max(0, product.quantityRemaining)
+                  : 0;
+              const desiredQty =
                 orderQuantities[id] !== undefined && orderQuantities[id] > 0
                   ? orderQuantities[id]
                   : prev[id] !== undefined && prev[id] > 0
                   ? prev[id]
                   : 1;
+              next[id] = Math.min(desiredQty, maxStock);
             });
             return next;
           });
