@@ -40,6 +40,7 @@ const NewOrderScreen = ({
   };
 
   const selectedCount = selectedProductIds.length;
+  const hasAnyStock = products.some((p) => (p.quantityRemaining ?? 0) > 0);
   
   // Extract clean customer identity
   const customerContactPerson = (customer?.contact_person || customer?.contactPerson || '').trim();
@@ -122,6 +123,20 @@ const NewOrderScreen = ({
                 paddingBottom: selectedCount > 0 ? 100 : 16,
               }}
             >
+              {!hasAnyStock && (
+                <View className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-4 flex-row items-center">
+                  <Ionicons name="alert-circle" size={20} color="#dc2626" className="mr-2.5" />
+                  <View className="flex-1">
+                    <Text className="text-red-800 font-bold text-xs">
+                      No Stock Remaining on Board
+                    </Text>
+                    <Text className="text-red-700 text-[11px] mt-0.5">
+                      All loaded vehicle inventory has been sold. Sales are blocked until stock is replenished.
+                    </Text>
+                  </View>
+                </View>
+              )}
+
               <View className="flex-row flex-wrap justify-between">
                 {products.map((item) => (
                   <ProductOrderCard

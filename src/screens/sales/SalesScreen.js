@@ -140,6 +140,7 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
   const selectedProductsList = allProducts.filter((p) =>
     selectedProductIds.includes(p.id)
   );
+  const hasAvailableStock = allProducts.some((p) => (p.quantityRemaining ?? 0) > 0);
 
   // Hardware Back Press Navigation Handler for Sales sub-steps
   useBackHandler(() => {
@@ -211,6 +212,21 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
 
       if (formattedItems.length === 0) {
         Alert.alert('Empty Order', 'Please select at least one product with a quantity.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const outOfStockOrOver = formattedItems.find((item) => {
+        const product = allProducts.find((p) => p.id === item.productId);
+        const available = product?.quantityRemaining ?? 0;
+        return available <= 0 || item.quantitySold > available;
+      });
+      if (outOfStockOrOver) {
+        const product = allProducts.find((p) => p.id === outOfStockOrOver.productId);
+        Alert.alert(
+          'Insufficient Stock',
+          `Cannot sell ${outOfStockOrOver.quantitySold} of "${outOfStockOrOver.name}". Only ${product?.quantityRemaining ?? 0} remaining on board.`
+        );
         setIsSubmitting(false);
         return;
       }
@@ -354,6 +370,7 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
       <CustomerDetailsScreen
         customer={selectedCustomer}
         activeTrip={activeTrip}
+        hasAvailableStock={hasAvailableStock}
         onBack={() => setSubStep('list')}
         onEdit={() => setSubStep('edit')}
         onAddOrder={() => {
@@ -361,6 +378,13 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
             Alert.alert(
               'No Active Trip',
               'You cannot make a sale without an assigned active delivery trip. Please check your trip assignment.'
+            );
+            return;
+          }
+          if (!hasAvailableStock) {
+            Alert.alert(
+              'Out of Stock',
+              'No remaining stock is available on board to make a sale.'
             );
             return;
           }
@@ -380,10 +404,21 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
         initialQuantities={orderQuantities}
         onBack={() => setSubStep('details')}
         onContinue={(productIds) => {
-          setSelectedProductIds(productIds);
+          const validProductIds = productIds.filter((id) => {
+            const product = allProducts.find((p) => p.id === id);
+            return (product?.quantityRemaining ?? 0) > 0;
+          });
+          if (validProductIds.length === 0) {
+            Alert.alert(
+              'Out of Stock',
+              'Selected products have no remaining stock on board.'
+            );
+            return;
+          }
+          setSelectedProductIds(validProductIds);
           setOrderQuantities((prev) => {
             const next = {};
-            productIds.forEach((id) => {
+            validProductIds.forEach((id) => {
               const product = allProducts.find((p) => p.id === id);
               const maxStock =
                 typeof product?.quantityRemaining === 'number'

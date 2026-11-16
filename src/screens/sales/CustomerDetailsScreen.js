@@ -8,8 +8,16 @@ import { customerApi } from '../../api/endpoints/customerApi';
 import { customerRepository } from '../../database';
 import { networkSentinel } from '../../sync/networkSentinel';
 
-const CustomerDetailsScreen = ({ customer, activeTrip, onBack, onEdit, onAddOrder }) => {
+const CustomerDetailsScreen = ({
+  customer,
+  activeTrip,
+  hasAvailableStock = true,
+  onBack,
+  onEdit,
+  onAddOrder,
+}) => {
   const isTripActive = Boolean(activeTrip && activeTrip.status === 'IN_PROGRESS');
+  const canPlaceOrder = isTripActive && hasAvailableStock;
   const [localCustomer, setLocalCustomer] = useState(customer);
   const [localBalances, setLocalBalances] = useState([]);
   const [enrichedData, setEnrichedData] = useState(null);
@@ -365,10 +373,16 @@ const CustomerDetailsScreen = ({ customer, activeTrip, onBack, onEdit, onAddOrde
 
           {/* Action Button */}
           <PrimaryButton
-            title={isTripActive ? "ADD ORDER" : "NO ACTIVE TRIP ASSIGNED"}
+            title={
+              !isTripActive
+                ? "NO ACTIVE TRIP ASSIGNED"
+                : !hasAvailableStock
+                ? "NO STOCK AVAILABLE"
+                : "ADD ORDER"
+            }
             onPress={onAddOrder}
-            bgColor={isTripActive ? "bg-[#facc15]" : "bg-gray-200"}
-            textColor={isTripActive ? "text-[#0d4761]" : "text-gray-400"}
+            bgColor={canPlaceOrder ? "bg-[#facc15]" : "bg-gray-200"}
+            textColor={canPlaceOrder ? "text-[#0d4761]" : "text-gray-400"}
           />
         </View>
       </FadeInView>

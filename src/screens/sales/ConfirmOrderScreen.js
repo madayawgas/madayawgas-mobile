@@ -155,13 +155,14 @@ const ConfirmOrderScreen = ({
       return;
     }
 
-    // Strict guard against any product exceeding remaining stock on board
+    // Strict guard against any product with no stock or exceeding remaining stock on board
     const overstockedItem = products.find((item) => {
       const max =
         typeof item.quantityRemaining === 'number'
           ? item.quantityRemaining
           : 0;
-      return (quantities[item.id] || 0) > max;
+      const qty = quantities[item.id] || 0;
+      return qty > 0 && (max <= 0 || qty > max);
     });
     if (overstockedItem) {
       Alert.alert(
@@ -414,14 +415,14 @@ const ConfirmOrderScreen = ({
 
                     <TouchableOpacity
                       onPress={() => handleQuickAddProduct(p)}
-                      disabled={isSubmitting || p.quantityRemaining === 0}
-                      style={{ opacity: p.quantityRemaining === 0 ? 0.4 : 1 }}
+                      disabled={isSubmitting || (p.quantityRemaining ?? 0) <= 0}
+                      style={{ opacity: (p.quantityRemaining ?? 0) <= 0 ? 0.4 : 1 }}
                       activeOpacity={0.8}
                       className="bg-[#0d4761] px-3.5 py-2 rounded-full flex-row items-center shadow-xs"
                     >
                       <Ionicons name="add" size={16} color="#ffffff" />
                       <Text className="text-white text-xs font-bold ml-1">
-                        {p.quantityRemaining === 0 ? 'Out' : 'Add'}
+                        {(p.quantityRemaining ?? 0) <= 0 ? 'Out' : 'Add'}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -511,14 +512,14 @@ const ConfirmOrderScreen = ({
                             setShowAddProductModal(false);
                           }
                         }}
-                        disabled={p.quantityRemaining === 0}
-                        style={{ opacity: p.quantityRemaining === 0 ? 0.4 : 1 }}
+                        disabled={(p.quantityRemaining ?? 0) <= 0}
+                        style={{ opacity: (p.quantityRemaining ?? 0) <= 0 ? 0.4 : 1 }}
                         activeOpacity={0.8}
                         className="bg-[#0d4761] px-4 py-2 rounded-full flex-row items-center shadow-xs"
                       >
                         <Ionicons name="add" size={16} color="#ffffff" />
                         <Text className="text-white text-xs font-bold ml-1">
-                          {p.quantityRemaining === 0 ? 'Out' : 'Add'}
+                          {(p.quantityRemaining ?? 0) <= 0 ? 'Out' : 'Add'}
                         </Text>
                       </TouchableOpacity>
                     </View>
