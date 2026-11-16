@@ -77,7 +77,7 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
   const inventoryItems = dashboardData.inventory || [];
 
   return (
-    <View className="flex-1 bg-white">
+    <View className="flex-1 bg-slate-100">
       <ScrollView
         className="flex-1"
         showsVerticalScrollIndicator={false}
@@ -92,62 +92,71 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
         }
       >
         {/* Header Section with SVG Background */}
-        <View className="relative w-full h-72 bg-white">
+        <View className="relative w-full h-80 bg-slate-100">
           <View className="absolute top-0 left-0 right-0 bottom-0 w-full">
             <DashboardDesign width="100%" height="100%" preserveAspectRatio="none" />
           </View>
 
-          <View className="pt-16 px-6 flex-row justify-between items-start">
-            <View>
-              <Text className="text-white text-4xl font-bold">Welcome,</Text>
-              <Text className="text-white text-xl mt-1">
-                {user?.firstName || user?.username || 'Sales Agent'}!
-              </Text>
+          <View className="pt-14 px-6">
+            <View className="flex-row justify-between items-center mb-4">
+              {/* Network / Sync Status Pill */}
+              <View className="flex-row items-center bg-white/10 px-3.5 py-1.5 rounded-full border border-white/10">
+                <View
+                  className={`w-2.5 h-2.5 rounded-full mr-2 ${
+                    dashboardData.isOnline ? 'bg-emerald-400' : 'bg-amber-400'
+                  }`}
+                />
+                <Text className="text-white text-xs font-bold tracking-wide">
+                  {dashboardData.isOnline ? 'Online' : 'Offline'}
+                </Text>
+              </View>
+
+              {dashboardData.pendingSyncCount > 0 ? (
+                <View className="bg-amber-400 px-3 py-1 rounded-full flex-row items-center">
+                  <Ionicons name="cloud-upload-outline" size={12} color="#0d4761" style={{ marginRight: 4 }} />
+                  <Text className="text-[#0d4761] text-[10px] font-extrabold uppercase tracking-wide">
+                    {dashboardData.pendingSyncCount} queued
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
-            {/* Network / Sync Status Pill */}
-            <View
-              className={`flex-row items-center px-3 py-1.5 rounded-full ${
-                dashboardData.isOnline ? 'bg-emerald-500/20 border border-emerald-400/40' : 'bg-amber-500/20 border border-amber-400/40'
-              }`}
-            >
-              <View
-                className={`w-2 h-2 rounded-full mr-2 ${
-                  dashboardData.isOnline ? 'bg-emerald-400' : 'bg-amber-400'
-                }`}
-              />
-              <Text className="text-white text-[11px] font-semibold tracking-wider">
-                {dashboardData.isOnline ? 'ONLINE' : 'OFFLINE'}
-              </Text>
-            </View>
+            {/* Greeting */}
+            <Text className="text-white/70 text-xs font-bold uppercase tracking-widest">
+              Sales Route Control
+            </Text>
+            <Text className="text-white text-3xl font-extrabold tracking-tight mt-0.5">
+              Welcome, {user?.firstName || user?.username || 'Sales Agent'}!
+            </Text>
           </View>
         </View>
 
         {/* Main Content */}
-        <View className="px-6 -mt-24 z-10">
+        <View className="px-5 -mt-24 z-10">
           {/* Active Trip / Delivery Route Card */}
-          <View className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 mb-5">
-            <View className="flex-row justify-between items-center mb-3">
+          <View className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/90 mb-5">
+            <View className="flex-row justify-between items-center mb-4">
               <View className="flex-row items-center">
-                <Ionicons
-                  name={isTripActive ? 'navigate-circle' : 'time-outline'}
-                  size={20}
-                  color={isTripActive ? '#10b981' : '#64748b'}
-                  className="mr-2"
+                <View
+                  className={`w-2.5 h-2.5 rounded-full mr-2 ${
+                    isTripActive ? 'bg-emerald-500' : 'bg-slate-400'
+                  }`}
                 />
-                <Text className="text-[#0d4761] font-bold text-sm">
-                  {isTripActive ? 'ACTIVE ROUTE DELIVERY' : 'DELIVERY ASSIGNMENT'}
+                <Text className="text-xs font-extrabold text-[#0d4761] uppercase tracking-wider">
+                  {isTripActive ? 'Active Route Delivery' : 'Delivery Assignment'}
                 </Text>
               </View>
 
               <View
-                className={`px-2.5 py-0.5 rounded-full ${
-                  isTripActive ? 'bg-emerald-100' : 'bg-slate-100'
+                className={`px-3 py-1 rounded-full ${
+                  isTripActive
+                    ? 'bg-emerald-100 border border-emerald-300'
+                    : 'bg-slate-100 border border-slate-200'
                 }`}
               >
                 <Text
-                  className={`text-[10px] font-bold uppercase ${
-                    isTripActive ? 'text-emerald-700' : 'text-slate-600'
+                  className={`text-[10px] font-extrabold uppercase tracking-wide ${
+                    isTripActive ? 'text-emerald-800' : 'text-slate-600'
                   }`}
                 >
                   {activeTrip?.status || 'STANDBY'}
@@ -156,215 +165,299 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
             </View>
 
             {activeTrip ? (
-              <View className="space-y-2">
-                <View className="flex-row justify-between items-center py-1 border-b border-gray-50">
-                  <Text className="text-gray-500 text-xs font-medium">Trip Number:</Text>
-                  <Text className="text-[#0d4761] text-xs font-bold">{activeTrip.trip_number}</Text>
-                </View>
-                <View className="flex-row justify-between items-center py-1 border-b border-gray-50">
-                  <Text className="text-gray-500 text-xs font-medium">Service Zone:</Text>
-                  <Text className="text-[#0d4761] text-xs font-bold">
-                    {activeTrip.zone_name || activeTrip.zone_id || 'Default Route'}
+              <View>
+                {/* Trip Number Chip */}
+                <View className="bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-2.5 mb-3.5 flex-row justify-between items-center">
+                  <Text className="text-[11px] font-bold text-slate-600 uppercase tracking-wide">
+                    Trip Number
+                  </Text>
+                  <Text className="text-xs font-extrabold text-[#0d4761]">
+                    {activeTrip.trip_number}
                   </Text>
                 </View>
-                <View className="flex-row justify-between items-center py-1 border-b border-gray-50">
-                  <Text className="text-gray-500 text-xs font-medium">Driver:</Text>
-                  <Text className="text-[#0d4761] text-xs font-bold">{activeTrip.driver_name}</Text>
-                </View>
-                <View className="flex-row justify-between items-center py-1">
-                  <Text className="text-gray-500 text-xs font-medium">Vehicle Plate & Model:</Text>
-                  <Text className="text-[#0d4761] text-xs font-bold">
-                    {activeTrip.vehicle_plate}
-                    {activeTrip.truck_model ? ` (${activeTrip.truck_model})` : ''}
-                  </Text>
+
+                {/* 2x2 Bento Grid */}
+                <View className="flex-row flex-wrap gap-2.5">
+                  <View className="w-[48%] bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                    <View className="flex-row items-center mb-1">
+                      <Ionicons name="navigate-outline" size={13} color="#0d4761" style={{ marginRight: 4 }} />
+                      <Text className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                        Service Zone
+                      </Text>
+                    </View>
+                    <Text className="text-xs font-extrabold text-[#0d4761]" numberOfLines={1}>
+                      {activeTrip.zone_name || activeTrip.zone_id || 'Default Route'}
+                    </Text>
+                  </View>
+
+                  <View className="w-[48%] bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                    <View className="flex-row items-center mb-1">
+                      <Ionicons name="person-outline" size={13} color="#0d4761" style={{ marginRight: 4 }} />
+                      <Text className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                        Driver
+                      </Text>
+                    </View>
+                    <Text className="text-xs font-extrabold text-[#0d4761]" numberOfLines={1}>
+                      {activeTrip.driver_name || 'Assigned Driver'}
+                    </Text>
+                  </View>
+
+                  <View className="w-[48%] bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                    <View className="flex-row items-center mb-1">
+                      <Ionicons name="bus-outline" size={13} color="#0d4761" style={{ marginRight: 4 }} />
+                      <Text className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                        Vehicle Plate
+                      </Text>
+                    </View>
+                    <Text className="text-xs font-extrabold text-[#0d4761]" numberOfLines={1}>
+                      {activeTrip.vehicle_plate || 'N/A'}
+                    </Text>
+                  </View>
+
+                  <View className="w-[48%] bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                    <View className="flex-row items-center mb-1">
+                      <Ionicons name="cube-outline" size={13} color="#0d4761" style={{ marginRight: 4 }} />
+                      <Text className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                        Truck Model
+                      </Text>
+                    </View>
+                    <Text className="text-xs font-extrabold text-[#0d4761]" numberOfLines={1}>
+                      {activeTrip.truck_model || 'Standard Truck'}
+                    </Text>
+                  </View>
                 </View>
               </View>
             ) : (
-              <View className="py-2 items-center">
-                <Text className="text-gray-400 text-xs text-center">
+              <View className="py-6 items-center justify-center">
+                <View className="w-12 h-12 rounded-full bg-slate-100 items-center justify-center mb-2.5 border border-slate-200/60">
+                  <Ionicons name="time-outline" size={24} color="#64748b" />
+                </View>
+                <Text className="text-sm font-bold text-[#0d4761] text-center mb-1">
+                  Awaiting Shift Dispatch
+                </Text>
+                <Text className="text-xs text-slate-500 text-center font-medium max-w-[260px]">
                   No active delivery trip assigned today. Pull down to refresh or check with dispatch.
                 </Text>
               </View>
             )}
           </View>
 
-          {/* Total Sales Section */}
-          <Text className="text-[#0d4761] font-bold mb-2">Total Sales (Active Shift):</Text>
-          <View className="bg-[#f4f5f7] rounded-xl flex-row justify-between items-center px-4 py-4 mb-6">
-            <View>
-              <Text className="text-[#0d4761] text-3xl font-bold">
-                ₱{' '}
-                {(dashboardData.totalSales || 0).toLocaleString('en-US', {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </Text>
-              <Text className="text-gray-400 text-[10px] mt-0.5">Real-time local recorded gross sales</Text>
+          {/* Total Sales KPI Card */}
+          <View className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/90 mb-5">
+            <View className="flex-row justify-between items-center">
+              <View className="flex-1 pr-3">
+                <Text className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  Total Sales (Active Shift)
+                </Text>
+                <Text className="text-[#0d4761] text-3xl font-extrabold tracking-tight mt-1">
+                  ₱{' '}
+                  {(dashboardData.totalSales || 0).toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </Text>
+                <Text className="text-slate-500 text-[11px] font-medium mt-0.5">
+                  Real-time local recorded gross sales
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => {
+                  if (!isTripActive) {
+                    Alert.alert(
+                      'No Active Trip',
+                      'You cannot make a sale without an assigned active delivery trip. Please check your trip assignment.'
+                    );
+                    return;
+                  }
+                  onSelectTab && onSelectTab('sales');
+                }}
+                activeOpacity={isTripActive ? 0.85 : 0.6}
+                className={`${
+                  isTripActive ? 'bg-[#facc15] border border-amber-300' : 'bg-slate-200 border border-slate-300'
+                } px-4 py-3 rounded-2xl flex-row items-center shadow-sm`}
+              >
+                <Ionicons
+                  name="add-circle"
+                  size={16}
+                  color={isTripActive ? '#0d4761' : '#94a3b8'}
+                  style={{ marginRight: 5 }}
+                />
+                <Text
+                  className={`${
+                    isTripActive ? 'text-[#0d4761]' : 'text-slate-500'
+                  } text-xs font-extrabold uppercase tracking-wider`}
+                >
+                  New Order
+                </Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              onPress={() => {
-                if (!isTripActive) {
-                  Alert.alert(
-                    'No Active Trip',
-                    'You cannot make a sale without an assigned active delivery trip. Please check your trip assignment.'
-                  );
-                  return;
-                }
-                onSelectTab && onSelectTab('sales');
-              }}
-              activeOpacity={isTripActive ? 0.8 : 0.5}
-              className={`${isTripActive ? 'bg-[#facc15]' : 'bg-gray-200'} px-4 py-2.5 rounded-full shadow-sm`}
-            >
-              <Text className={`${isTripActive ? 'text-[#0d4761]' : 'text-gray-400'} text-xs font-bold uppercase tracking-wider`}>New Order</Text>
-            </TouchableOpacity>
           </View>
 
           {/* Pending Sync Alert Banner (if any) */}
           {dashboardData.pendingSyncCount > 0 && (
-            <View className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex-row items-center mb-6">
-              <Ionicons name="cloud-upload-outline" size={20} color="#d97706" className="mr-2" />
+            <View className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex-row items-center mb-5 shadow-sm">
+              <View className="w-9 h-9 rounded-xl bg-amber-100 items-center justify-center mr-3">
+                <Ionicons name="cloud-upload-outline" size={20} color="#d97706" />
+              </View>
               <View className="flex-1">
                 <Text className="text-amber-900 font-bold text-xs">
                   {dashboardData.pendingSyncCount} record(s) queued for synchronization
                 </Text>
-                <Text className="text-amber-700 text-[10px] mt-0.5">
+                <Text className="text-amber-800 text-[11px] mt-0.5 font-medium">
                   Transactions and offline customers will upload automatically when online.
                 </Text>
               </View>
             </View>
           )}
 
-          {/* Vehicle Inventory Section (Discrete Integer Units) */}
-          <View className="flex-row justify-between items-center mb-2">
-            <Text className="text-[#0d4761] font-bold">Vehicle Inventory on Board:</Text>
-            <Text className="text-gray-400 text-[10px]">Remaining / Loaded</Text>
-          </View>
+          {/* Vehicle Inventory Card */}
+          <View className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/90 mb-5">
+            <View className="flex-row justify-between items-center mb-3.5">
+              <View className="flex-row items-center">
+                <Ionicons name="layers-outline" size={16} color="#0d4761" style={{ marginRight: 6 }} />
+                <Text className="text-xs font-extrabold text-[#0d4761] uppercase tracking-wider">
+                  Vehicle Inventory on Board
+                </Text>
+              </View>
+              <Text className="text-slate-500 text-[10px] font-semibold">Remaining / Loaded</Text>
+            </View>
 
-          <View className="bg-[#f4f5f7] rounded-xl p-4 mb-6">
             {inventoryItems.length > 0 ? (
-              inventoryItems.map((inv, idx) => (
-                <View
-                  key={inv.product_id || idx}
-                  className={`flex-row justify-between items-center py-2 ${
-                    idx < inventoryItems.length - 1 ? 'border-b border-gray-200/60' : ''
-                  }`}
-                >
-                  <View className="flex-1 pr-2">
-                    <Text className="text-[#0d4761] font-bold text-xs">
-                      {inv.product_name}
-                    </Text>
-                    <Text className="text-gray-400 text-[10px]">
-                      Sold: {inv.quantity_sold || 0} unit(s)
-                    </Text>
-                  </View>
-                  <View className="items-end">
-                    <Text className="text-[#0d4761] font-bold text-sm">
-                      {inv.quantity_remaining || 0}{' '}
-                      <Text className="text-gray-400 text-xs font-normal">
-                        / {inv.quantity_loaded || 0}
+              <View>
+                {inventoryItems.map((inv, idx) => (
+                  <View
+                    key={inv.product_id || idx}
+                    className={`bg-slate-50 border border-slate-200/80 rounded-xl px-3.5 py-3 flex-row justify-between items-center ${
+                      idx < inventoryItems.length - 1 ? 'mb-2.5' : ''
+                    }`}
+                  >
+                    <View className="flex-1 pr-2">
+                      <Text className="text-[#0d4761] font-bold text-xs">
+                        {inv.product_name}
                       </Text>
-                    </Text>
+                      <Text className="text-slate-500 text-[11px] mt-0.5 font-medium">
+                        Sold: {inv.quantity_sold || 0} unit(s)
+                      </Text>
+                    </View>
+                    <View className="items-end">
+                      <Text className="text-[#0d4761] font-extrabold text-sm">
+                        {inv.quantity_remaining || 0}{' '}
+                        <Text className="text-slate-400 text-xs font-semibold">
+                          / {inv.quantity_loaded || 0}
+                        </Text>
+                      </Text>
+                    </View>
                   </View>
-                </View>
-              ))
+                ))}
+              </View>
             ) : (
-              <View className="py-2 items-center">
-                <Text className="text-gray-400 text-xs">
+              <View className="py-5 items-center bg-slate-50 border border-slate-200/80 rounded-xl">
+                <Text className="text-slate-500 text-xs font-medium">
                   Inventory not loaded yet for this shift.
                 </Text>
               </View>
             )}
           </View>
 
-          {/* Recent Transactions Section */}
-          <View className="flex-row justify-between items-center mb-2">
-            <Text className="text-[#0d4761] font-bold">Recent Transactions:</Text>
-            {dashboardData.recentOrders?.length > 0 && (
-              <Text className="text-gray-400 text-[10px]">
-                Showing latest {dashboardData.recentOrders.length}
-              </Text>
-            )}
-          </View>
-
-          {loading ? (
-            <View className="bg-[#f4f5f7] rounded-xl h-36 items-center justify-center">
-              <ActivityIndicator color="#0d4761" size="small" />
+          {/* Recent Transactions Card */}
+          <View className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/90">
+            <View className="flex-row justify-between items-center mb-3.5">
+              <View className="flex-row items-center">
+                <Ionicons name="receipt-outline" size={16} color="#0d4761" style={{ marginRight: 6 }} />
+                <Text className="text-xs font-extrabold text-[#0d4761] uppercase tracking-wider">
+                  Recent Transactions
+                </Text>
+              </View>
+              {dashboardData.recentOrders?.length > 0 && (
+                <Text className="text-slate-500 text-[10px] font-semibold">
+                  Latest {dashboardData.recentOrders.length}
+                </Text>
+              )}
             </View>
-          ) : dashboardData.recentOrders && dashboardData.recentOrders.length > 0 ? (
-            <View className="bg-[#f4f5f7] rounded-xl p-3 mb-6">
-              {dashboardData.recentOrders.map((ord, idx) => {
-                const isSynced = ord.sync_status === 'SYNCED';
-                const isQuarantined = ord.sync_status === 'QUARANTINED' || ord.sync_status === 'FAILED';
-                const formattedTime = ord.transacted_at
-                  ? new Date(ord.transacted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  : '';
 
-                return (
-                  <View
-                    key={ord.id || idx}
-                    className={`p-2.5 rounded-lg bg-white mb-2 border border-gray-100 ${
-                      idx === dashboardData.recentOrders.length - 1 ? 'mb-0' : ''
-                    }`}
-                  >
-                    <View className="flex-row justify-between items-start mb-1">
-                      <View className="flex-1 pr-2">
-                        <Text className="text-[#0d4761] font-bold text-xs" numberOfLines={1}>
-                          {ord.receipt_number || ord.transaction_no}
-                        </Text>
-                        <Text className="text-gray-600 text-[11px] font-medium" numberOfLines={1}>
-                          {ord.customer_name || 'Customer'}
-                        </Text>
-                      </View>
-                      <View className="items-end">
-                        <Text className="text-[#0d4761] font-bold text-xs">
-                          ₱ {Number(ord.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                        </Text>
-                        <Text className="text-gray-400 text-[9px]">{formattedTime}</Text>
-                      </View>
-                    </View>
+            {loading ? (
+              <View className="bg-slate-50 border border-slate-200/80 rounded-xl h-32 items-center justify-center">
+                <ActivityIndicator color="#0d4761" size="small" />
+              </View>
+            ) : dashboardData.recentOrders && dashboardData.recentOrders.length > 0 ? (
+              <View>
+                {dashboardData.recentOrders.map((ord, idx) => {
+                  const isSynced = ord.sync_status === 'SYNCED';
+                  const isQuarantined = ord.sync_status === 'QUARANTINED' || ord.sync_status === 'FAILED';
+                  const formattedTime = ord.transacted_at
+                    ? new Date(ord.transacted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : '';
 
-                    <View className="flex-row justify-between items-center mt-1 pt-1 border-t border-gray-50">
-                      <View className="bg-gray-100 px-2 py-0.5 rounded">
-                        <Text className="text-gray-600 text-[9px] font-bold uppercase">
-                          {ord.payment_method || 'CASH'}
-                        </Text>
+                  return (
+                    <View
+                      key={ord.id || idx}
+                      className={`p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 ${
+                        idx < dashboardData.recentOrders.length - 1 ? 'mb-2.5' : ''
+                      }`}
+                    >
+                      <View className="flex-row justify-between items-start mb-1.5">
+                        <View className="flex-1 pr-2">
+                          <Text className="text-[#0d4761] font-bold text-xs" numberOfLines={1}>
+                            {ord.receipt_number || ord.transaction_no}
+                          </Text>
+                          <Text className="text-slate-600 text-[11px] font-medium mt-0.5" numberOfLines={1}>
+                            {ord.customer_name || 'Customer'}
+                          </Text>
+                        </View>
+                        <View className="items-end">
+                          <Text className="text-[#0d4761] font-extrabold text-xs">
+                            ₱ {Number(ord.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </Text>
+                          <Text className="text-slate-400 text-[10px] mt-0.5">{formattedTime}</Text>
+                        </View>
                       </View>
 
-                      <View
-                        className={`px-2 py-0.5 rounded-full ${
-                          isSynced
-                            ? 'bg-emerald-100'
-                            : isQuarantined
-                            ? 'bg-rose-100'
-                            : 'bg-amber-100'
-                        }`}
-                      >
-                        <Text
-                          className={`text-[9px] font-bold uppercase ${
+                      <View className="flex-row justify-between items-center pt-2 border-t border-slate-200/70">
+                        <View className="bg-white border border-slate-200 px-2.5 py-0.5 rounded-md">
+                          <Text className="text-slate-600 text-[9px] font-bold uppercase tracking-wide">
+                            {ord.payment_method || 'CASH'}
+                          </Text>
+                        </View>
+
+                        <View
+                          className={`px-2.5 py-0.5 rounded-full ${
                             isSynced
-                              ? 'text-emerald-700'
+                              ? 'bg-emerald-100 border border-emerald-200'
                               : isQuarantined
-                              ? 'text-rose-700'
-                              : 'text-amber-700'
+                              ? 'bg-rose-100 border border-rose-200'
+                              : 'bg-amber-100 border border-amber-200'
                           }`}
                         >
-                          {ord.sync_status || 'PENDING'}
-                        </Text>
+                          <Text
+                            className={`text-[9px] font-extrabold uppercase tracking-wide ${
+                              isSynced
+                                ? 'text-emerald-800'
+                                : isQuarantined
+                                ? 'text-rose-800'
+                                : 'text-amber-800'
+                            }`}
+                          >
+                            {ord.sync_status || 'PENDING'}
+                          </Text>
+                        </View>
                       </View>
                     </View>
-                  </View>
-                );
-              })}
-            </View>
-          ) : (
-            <View className="bg-[#f4f5f7] rounded-xl p-6 items-center justify-center mb-6">
-              <Ionicons name="receipt-outline" size={32} color="#9ca3af" />
-              <Text className="text-[#0d4761] font-bold text-sm mt-2">No Transactions Yet</Text>
-              <Text className="text-gray-400 text-xs text-center mt-1">
-                Completed orders transacted during this delivery shift will appear here.
-              </Text>
-            </View>
-          )}
+                  );
+                })}
+              </View>
+            ) : (
+              <View className="bg-slate-50 border border-slate-200/80 rounded-xl p-6 items-center justify-center">
+                <View className="w-12 h-12 rounded-full bg-white border border-slate-200 items-center justify-center mb-2.5">
+                  <Ionicons name="receipt-outline" size={24} color="#64748b" />
+                </View>
+                <Text className="text-[#0d4761] font-bold text-sm">No Transactions Yet</Text>
+                <Text className="text-slate-500 text-xs text-center mt-1 max-w-[240px]">
+                  Completed orders transacted during this delivery shift will appear here.
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
       </ScrollView>
 

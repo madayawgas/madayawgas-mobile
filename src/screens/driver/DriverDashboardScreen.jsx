@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import BottomNav from '../../components/navigation/BottomNav';
+import DashboardDesign from '../../../assets/svg/driver-dashboard-bg.svg';
 import { driverService } from '@/services/driverService';
 import { syncScheduler } from '@/sync/syncScheduler';
 import { socketClient } from '@/realtime';
@@ -243,9 +244,14 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
           />
         }
       >
-        {/* Top App Bar / Hero Header */}
-        <View className="bg-[#0d4761] pt-14 pb-11 px-6 rounded-b-[36px] shadow-sm">
-          <View className="flex-row justify-between items-center mb-4">
+        {/* Top App Bar / Hero Header with SVG Background */}
+        <View className="relative w-full h-80 bg-slate-100">
+          <View className="absolute top-0 left-0 right-0 bottom-0 w-full">
+            <DashboardDesign width="100%" height="100%" preserveAspectRatio="none" />
+          </View>
+
+          <View className="pt-14 px-6">
+            <View className="flex-row justify-between items-center mb-4">
             {/* Online / Offline Pill */}
             <View className="flex-row items-center bg-white/10 px-3.5 py-1.5 rounded-full border border-white/10">
               <View
@@ -290,13 +296,14 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
             </View>
           </View>
 
-          {/* Greeting */}
-          <Text className="text-white/70 text-xs font-bold uppercase tracking-widest">
-            Driver Cabin Control
-          </Text>
-          <Text className="text-white text-3xl font-extrabold tracking-tight mt-0.5">
-            Good day, {user?.firstName || 'Danilo'}!
-          </Text>
+            {/* Greeting */}
+            <Text className="text-white/70 text-xs font-bold uppercase tracking-widest">
+              Driver Cabin Control
+            </Text>
+            <Text className="text-white text-3xl font-extrabold tracking-tight mt-0.5">
+              Good day, {user?.firstName || 'Danilo'}!
+            </Text>
+          </View>
         </View>
 
         {loading ? (
@@ -305,7 +312,7 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
             <Text className="text-xs text-slate-500 font-semibold mt-3">Loading cabin telemetry...</Text>
           </View>
         ) : (
-          <View className="px-5 -mt-6 z-10">
+          <View className="px-5 -mt-24 z-10">
             {/* Emergency SOS Action Button */}
             <TouchableOpacity
               onPress={() => setShowSosModal(true)}
