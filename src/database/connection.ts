@@ -123,13 +123,15 @@ export async function resetFullDatabase(): Promise<void> {
       DROP TABLE IF EXISTS local_apprehensions;
       DROP TABLE IF EXISTS local_incidents;
       DROP TABLE IF EXISTS local_service_zones;
+      DROP TABLE IF EXISTS local_product_catalog;
+      DROP TABLE IF EXISTS local_maintenance_logs;
     `);
   } finally {
     // 2. Always restore foreign keys
     await db.execAsync('PRAGMA foreign_keys = ON;');
   }
 
-  // 3. Recreate all 13 schema tables and indexes
+  // 3. Recreate all 15 schema tables and indexes
   await db.execAsync(SCHEMA_SQL);
 }
 

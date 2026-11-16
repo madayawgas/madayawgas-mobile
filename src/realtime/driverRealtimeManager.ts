@@ -1,7 +1,8 @@
 import { socketClient } from './socketClient';
 import { tripRepository, driverRepository, inventoryRepository } from '@/database';
-import { tripApi, driverApi } from '@/api';
+import { tripApi, driverApi, productApi } from '@/api';
 import { authService } from '@/services/authService';
+import { dataRevalidator } from '@/services/dataRevalidator';
 import { VehicleTelemetry } from '@/types';
 
 export type DriverRealtimeEventType =
@@ -18,7 +19,8 @@ export type DriverRealtimeEventType =
   | 'FLEET_VEHICLE_RELEASED'
   | 'VEHICLE_STATUS_UPDATED'
   | 'EMERGENCY_ALERT_STATUS_UPDATED'
-  | 'APPREHENSION_STATUS_UPDATED';
+  | 'APPREHENSION_STATUS_UPDATED'
+  | 'PRODUCT_CATALOG_UPDATED';
 
 export type DriverRealtimeListener = (event: DriverRealtimeEventType, data: any) => void;
 
@@ -250,6 +252,34 @@ class DriverRealtimeManager {
     this.bindEvent('APPREHENSION_STATUS_UPDATED', (data) => {
       console.log('[DriverRealtime] APPREHENSION_STATUS_UPDATED received:', data?.status);
       this.notifyListeners('APPREHENSION_STATUS_UPDATED', data);
+    });
+
+    // 4. Product Catalog & Unit Price Updates (room:catalog / room:sales)
+    this.bindEvent('PRODUCT_CATALOG_UPDATED', async (data) => {
+      console.log('[DriverRealtime] PRODUCT_CATALOG_UPDATED received:', data?.action, data?.product?.id);
+      try {
+        let hasChanges = false;
+        if (data?.product?.id) {
+          hasChanges = await inventoryRepository.upsertProductCatalog([
+            {
+              ...data.product,
+              updatedAt: data.updatedAt || new Date().toISOString(),
+            },
+          ]);
+        } else {
+          const remoteCatalog = await productApi.fetchProductCatalog();
+          if (Array.isArray(remoteCatalog) && remoteCatalog.length > 0) {
+            hasChanges = await inventoryRepository.upsertProductCatalog(remoteCatalog);
+          }
+        }
+
+        if (hasChanges) {
+          dataRevalidator.emit('CATALOG_UPDATED');
+        }
+      } catch (e) {
+        console.warn('[DriverRealtime] Error handling PRODUCT_CATALOG_UPDATED:', e);
+      }
+      this.notifyListeners('PRODUCT_CATALOG_UPDATED', data);
     });
   }
 

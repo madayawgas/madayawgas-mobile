@@ -14,6 +14,7 @@ export interface ProductCatalogItem {
   category: string;
   containerType: ContainerType;
   netWeightKg: number;
+  unitPrice: number;
   price: number;
   unitsPerCrate?: number; // UI abstraction: 24 units for Butane 170g
   isActive: boolean;

@@ -178,6 +178,33 @@ CREATE TABLE IF NOT EXISTS local_service_zones (
   is_active INTEGER NOT NULL DEFAULT 1
 );
 
+-- 15. Product Catalog Metadata Cache (Prices, Weights, Container Types)
+CREATE TABLE IF NOT EXISTS local_product_catalog (
+  product_id TEXT PRIMARY KEY,
+  sku TEXT,
+  name TEXT NOT NULL,
+  category TEXT,
+  container_type TEXT,
+  net_weight_kg REAL,
+  price REAL NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT
+);
+
+-- 16. Vehicle Maintenance & Service History Cache
+CREATE TABLE IF NOT EXISTS local_maintenance_logs (
+  id TEXT PRIMARY KEY,
+  truck_id TEXT NOT NULL,
+  service_type TEXT,
+  title TEXT,
+  description TEXT,
+  odometer_at_service INTEGER NOT NULL DEFAULT 0,
+  cost REAL,
+  serviced_at TEXT NOT NULL,
+  next_pm_odometer INTEGER,
+  created_at TEXT
+);
+
 -- Seed canonical MadayawGas delivery routes for offline instant resolution
 INSERT OR IGNORE INTO local_service_zones (id, code, name, description, is_active) VALUES
   ('0df0e09d-3cea-4a88-88dc-835bb6d3ad8f', 'BANKEROHAN', 'Bankerohan Hub', 'Bankerohan Public Market and Central Commercial Hub', 1),
@@ -197,5 +224,6 @@ CREATE INDEX IF NOT EXISTS idx_sync_queue_user_status ON sync_queue (user_id, st
 CREATE INDEX IF NOT EXISTS idx_fuel_logs_truck ON local_fuel_logs (truck_id, logged_at);
 CREATE INDEX IF NOT EXISTS idx_apprehensions_truck ON local_apprehensions (truck_id, reported_at);
 CREATE INDEX IF NOT EXISTS idx_service_zones_code ON local_service_zones (code);
+CREATE INDEX IF NOT EXISTS idx_maintenance_logs_truck ON local_maintenance_logs (truck_id, serviced_at);
 `;
 

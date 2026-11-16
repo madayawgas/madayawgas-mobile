@@ -273,15 +273,26 @@ export const syncWorker = {
                 transactionNo: tx.transactionNo || tx.transaction_no || `TX-${item.id.slice(0, 8)}`,
                 customerId: tx.customerId || tx.customer_id,
                 transactedAt: tx.transactedAt || tx.transacted_at || new Date().toISOString(),
-                items: (p.items || []).map((it: any) => ({
-                  id: it.id,
-                  productId: it.productId || it.product_id,
-                  quantitySold: Number(it.quantitySold ?? it.quantity_sold ?? 0),
-                  emptiesReturned: Number(it.emptiesReturned ?? it.empties_returned ?? 0),
-                  emptiesDefective: Number(it.emptiesDefective ?? it.empties_defective ?? 0),
-                  unitPriceAtSale: Number(it.unitPriceAtSale ?? it.unitPrice ?? it.unit_price ?? 0),
-                  subtotalAmount: Number(it.subtotalAmount ?? it.subtotal ?? 0),
-                })),
+                items: (p.items || []).map((it: any) => {
+                  const rawUnitPrice =
+                    it.unitPriceAtSale ?? it.unit_price_at_sale ?? it.unitPrice ?? it.unit_price;
+                  const parsedUnitPrice =
+                    rawUnitPrice !== undefined && rawUnitPrice !== null && rawUnitPrice !== ''
+                      ? Number(rawUnitPrice)
+                      : undefined;
+
+                  return {
+                    id: it.id,
+                    productId: it.productId || it.product_id,
+                    quantitySold: Number(it.quantitySold ?? it.quantity_sold ?? 0),
+                    emptiesReturned: Number(it.emptiesReturned ?? it.empties_returned ?? 0),
+                    emptiesDefective: Number(it.emptiesDefective ?? it.empties_defective ?? 0),
+                    ...(parsedUnitPrice !== undefined && Number.isFinite(parsedUnitPrice)
+                      ? { unitPriceAtSale: parsedUnitPrice }
+                      : {}),
+                    subtotalAmount: Number(it.subtotalAmount ?? it.subtotal ?? 0),
+                  };
+                }),
                 invoice: p.invoice
                   ? {
                       id: p.invoice.id,

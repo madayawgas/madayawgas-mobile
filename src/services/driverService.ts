@@ -21,6 +21,8 @@ import {
   ActiveTrip,
 } from '@/types';
 import { mediaService } from './mediaService';
+import { dataRevalidator } from './dataRevalidator';
+import type { LocalFirstReadOptions } from './salesService';
 import { networkSentinel } from '@/sync/networkSentinel';
 import { driverRealtimeManager, DriverRealtimeListener } from '@/realtime';
 
@@ -36,16 +38,15 @@ export interface VehicleHealthData {
   maintenanceLogs: MaintenanceServiceLogItem[];
 }
 
-export const driverService = {
-  /**
-   * Initializes and retrieves dashboard operational context for the driver.
-   */
-  async getDashboardContext(user: UserSession): Promise<DriverDashboardContext> {
-    // 1. Authoritative active trip synchronization (remote first when online, then local cache fallback)
-    let activeTrip: ActiveTrip | null = null;
-    if (networkSentinel.isOnline()) {
+async function revalidateDriverDashboard(user: UserSession, force: boolean): Promise<void> {
+  await dataRevalidator.run(
+    'driver:dashboard',
+    async ({ isSessionStillValid }) => {
       try {
         const assignment = await tripApi.fetchActiveAssignment();
+        if (!(await isSessionStillValid())) return;
+
+        const currentLocal = await tripRepository.getActiveTrip();
         if (assignment?.trip && assignment.trip.id) {
           const rawTrip = assignment.trip as any;
           const tripId = rawTrip.id;
@@ -54,100 +55,144 @@ export const driverService = {
             rawTrip.trip_number ||
             `TRIP-${tripId.substring(0, 8)}`;
           const userDisplayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.username || 'Driver';
-          const vehiclePlate =
-            rawTrip.truckPlateNumber ||
-            rawTrip.truck_plate_number ||
-            rawTrip.truck?.plateNumber ||
-            rawTrip.truck?.plate_number ||
-            rawTrip.vehiclePlate ||
-            rawTrip.vehicle_plate ||
-            'N/A';
-          const truckModel =
-            rawTrip.truckModel ||
-            rawTrip.truck_model ||
-            rawTrip.truck?.model ||
-            null;
-          const truckId =
-            rawTrip.truckId ||
-            rawTrip.truck_id ||
-            rawTrip.truck?.id ||
-            null;
-          const driverId =
-            rawTrip.driverId ||
-            rawTrip.driver_id ||
-            rawTrip.driver?.id ||
-            user.id;
-          const driverName =
-            rawTrip.driverName ||
-            rawTrip.driver_name ||
-            rawTrip.driver?.fullName ||
-            userDisplayName;
-          const salesUserName =
-            rawTrip.salesUserName ||
-            rawTrip.sales_user_name ||
-            rawTrip.salesUser?.fullName ||
-            null;
-          const zoneName =
-            rawTrip.zoneName ||
-            rawTrip.zone_name ||
-            rawTrip.zone?.name ||
-            null;
 
-          activeTrip = {
+          const nextTrip: ActiveTrip = {
             trip_id: tripId,
             trip_number: tripNumber,
-            vehicle_plate: vehiclePlate,
-            driver_name: driverName,
+            vehicle_plate:
+              rawTrip.truckPlateNumber ||
+              rawTrip.truck_plate_number ||
+              rawTrip.truck?.plateNumber ||
+              rawTrip.truck?.plate_number ||
+              rawTrip.vehiclePlate ||
+              rawTrip.vehicle_plate ||
+              'N/A',
+            driver_name:
+              rawTrip.driverName ||
+              rawTrip.driver_name ||
+              rawTrip.driver?.fullName ||
+              userDisplayName,
             sales_user_id: rawTrip.salesUserId || rawTrip.sales_user_id || user.id,
             zone_id: rawTrip.zoneId || rawTrip.zone_id || 'DEFAULT',
             status: rawTrip.status || 'IN_PROGRESS',
             dispatched_at: rawTrip.departureTime || rawTrip.departure_time || new Date().toISOString(),
-            truck_id: truckId,
-            truck_model: truckModel,
-            driver_id: driverId,
-            sales_user_name: salesUserName,
-            zone_name: zoneName,
+            truck_id: rawTrip.truckId || rawTrip.truck_id || rawTrip.truck?.id || null,
+            truck_model: rawTrip.truckModel || rawTrip.truck_model || rawTrip.truck?.model || null,
+            driver_id: rawTrip.driverId || rawTrip.driver_id || rawTrip.driver?.id || user.id,
+            sales_user_name: rawTrip.salesUserName || rawTrip.sales_user_name || rawTrip.salesUser?.fullName || null,
+            zone_name: rawTrip.zoneName || rawTrip.zone_name || rawTrip.zone?.name || null,
           };
-          await tripRepository.saveActiveTrip(activeTrip);
-        } else {
-          // Authoritative server state: Driver has no active delivery trip today.
-          // Clear stale active trip in SQLite to prevent foreign key errors and ghost trips.
+
+          const tripChanged =
+            !currentLocal ||
+            currentLocal.trip_id !== nextTrip.trip_id ||
+            currentLocal.status !== nextTrip.status ||
+            currentLocal.vehicle_plate !== nextTrip.vehicle_plate ||
+            currentLocal.zone_id !== nextTrip.zone_id;
+
+          await tripRepository.saveActiveTrip(nextTrip);
+          if (tripChanged) {
+            dataRevalidator.emit('TRIP_UPDATED');
+          }
+        } else if (currentLocal) {
           await tripRepository.clearActiveTrip();
-          activeTrip = null;
+          dataRevalidator.emit('TRIP_UPDATED');
         }
       } catch (e) {
-        console.warn('[DriverService] Could not fetch remote assignment:', e);
+        console.warn('[DriverService] Background assignment revalidation warning:', e);
       }
-    }
 
-    if (!activeTrip) {
-      activeTrip = await tripRepository.getActiveTrip();
-      // Ensure cached trip belongs to this driver; if belonging to another user, purge it
-      if (activeTrip && activeTrip.driver_id && activeTrip.driver_id !== user.id) {
-        console.log('[DriverService] Cached trip belongs to another driver. Purging.');
-        await tripRepository.clearActiveTrip();
-        activeTrip = null;
-      }
-    }
-
-    // 2. Fetch driver's assigned vehicle telemetry (remote first if online, then local cache fallback)
-    let telemetry: VehicleTelemetry | null = null;
-    if (networkSentinel.isOnline()) {
       try {
         const myVehicle = await driverApi.fetchMyVehicle();
+        if (!(await isSessionStillValid())) return;
         if (myVehicle) {
-          await driverRepository.saveVehicleTelemetry(myVehicle);
-          telemetry = myVehicle;
+          const changed = await driverRepository.saveVehicleTelemetry(myVehicle);
+          if (changed) {
+            dataRevalidator.emit('TELEMETRY_UPDATED');
+          }
         }
       } catch (e) {
-        console.warn('[DriverService] Remote fetchMyVehicle failed, falling back to local database:', e);
+        console.warn('[DriverService] Background fetchMyVehicle warning:', e);
       }
+    },
+    { force }
+  );
+}
+
+async function revalidateVehicleHealth(truckId: string | undefined, force: boolean): Promise<void> {
+  const key = `driver:health:${truckId || 'default'}`;
+  await dataRevalidator.run(
+    key,
+    async ({ isSessionStillValid }) => {
+      let resolvedTruckId = truckId;
+      try {
+        const myVehicle = await driverApi.fetchMyVehicle();
+        if (!(await isSessionStillValid())) return;
+        if (myVehicle) {
+          resolvedTruckId = myVehicle.truck_id || resolvedTruckId;
+          const changed = await driverRepository.saveVehicleTelemetry(myVehicle);
+          if (changed) {
+            dataRevalidator.emit('TELEMETRY_UPDATED');
+          }
+        }
+      } catch (e) {
+        console.warn('[DriverService] Background vehicle telemetry warning:', e);
+      }
+
+      if (!resolvedTruckId) return;
+
+      try {
+        const remoteFuel = await driverApi.fetchFuelHistory(resolvedTruckId);
+        if (!(await isSessionStillValid())) return;
+        if (Array.isArray(remoteFuel) && remoteFuel.length > 0) {
+          const fuelChanged = await driverRepository.upsertFuelLogs(remoteFuel);
+          if (fuelChanged) {
+            dataRevalidator.emit('FUEL_LOGS_UPDATED');
+          }
+        }
+      } catch (e) {
+        console.warn('[DriverService] Background fuel history warning:', e);
+      }
+
+      try {
+        const remoteLogs = await driverApi.fetchMaintenanceLogs(resolvedTruckId);
+        if (!(await isSessionStillValid())) return;
+        if (Array.isArray(remoteLogs)) {
+          const maintChanged = await driverRepository.upsertMaintenanceLogs(resolvedTruckId, remoteLogs);
+          if (maintChanged) {
+            dataRevalidator.emit('MAINTENANCE_LOGS_UPDATED');
+          }
+        }
+      } catch (e) {
+        console.warn('[DriverService] Background maintenance logs warning:', e);
+      }
+    },
+    { force }
+  );
+}
+
+export const driverService = {
+  /**
+   * Local-First: Immediately returns cached dashboard operational context from SQLite
+   * and triggers deduplicated background revalidation when online.
+   */
+  async getDashboardContext(
+    user: UserSession,
+    options: LocalFirstReadOptions = {}
+  ): Promise<DriverDashboardContext> {
+    if (options.forceRefresh) {
+      await revalidateDriverDashboard(user, true);
+    } else if (!options.skipRevalidate) {
+      void revalidateDriverDashboard(user, false);
     }
 
-    if (!telemetry) {
-      telemetry = await driverRepository.getVehicleTelemetry();
+    let activeTrip = await tripRepository.getActiveTrip();
+    if (activeTrip && activeTrip.driver_id && activeTrip.driver_id !== user.id) {
+      await tripRepository.clearActiveTrip();
+      activeTrip = null;
     }
 
+    let telemetry = await driverRepository.getVehicleTelemetry();
     if (!telemetry) {
       telemetry = {
         truck_id: activeTrip?.truck_id || '',
@@ -163,7 +208,6 @@ export const driverService = {
       };
     }
 
-    // 3. Fetch pending sync count
     const pendingSyncCount = await syncQueueRepository.getPendingCount(user.id);
 
     return {
@@ -590,9 +634,13 @@ export const driverService = {
   },
 
   /**
-   * Query Vehicle Health, PM status, and historical logs
+   * Local-First: Query Vehicle Health, PM status, and historical logs immediately from SQLite,
+   * while revalidating telemetry, fuel history, and maintenance logs in the background.
    */
-  async getVehicleHealthData(truckId?: string): Promise<VehicleHealthData> {
+  async getVehicleHealthData(
+    truckId?: string,
+    options: LocalFirstReadOptions = {}
+  ): Promise<VehicleHealthData> {
     let resolvedTruckId = truckId;
     if (!resolvedTruckId) {
       const cached = await driverRepository.getVehicleTelemetry();
@@ -601,60 +649,35 @@ export const driverService = {
       }
     }
 
-    let telemetry = resolvedTruckId ? await driverRepository.getVehicleTelemetry(resolvedTruckId) : null;
-    if (!telemetry && networkSentinel.isOnline()) {
-      try {
-        telemetry = await driverApi.fetchMyVehicle();
-        if (telemetry) {
-          await driverRepository.saveVehicleTelemetry(telemetry);
-          resolvedTruckId = telemetry.truck_id;
-        }
-      } catch (err) {
-        console.warn('[DriverService] Could not fetch my vehicle:', err);
-      }
-    }
-
     const activeTrip = await tripRepository.getActiveTrip();
-    const effectiveTruckId = resolvedTruckId || telemetry?.truck_id || activeTrip?.truck_id || '';
+    const candidateTruckId = resolvedTruckId || activeTrip?.truck_id || '';
 
-    let localFuel: FuelLog[] = [];
-    try {
-      localFuel = effectiveTruckId
-        ? await driverRepository.getFuelLogs(effectiveTruckId)
-        : await driverRepository.getFuelLogs();
-    } catch (e) {
-      console.warn('[DriverService] Error getting local fuel logs:', e);
-    }
-
-    let fuelLogs = Array.isArray(localFuel) ? localFuel : [];
-    if (fuelLogs.length === 0 && effectiveTruckId && networkSentinel.isOnline()) {
-      try {
-        const remoteFuel = await driverApi.fetchFuelHistory(effectiveTruckId);
-        if (Array.isArray(remoteFuel)) {
-          fuelLogs = remoteFuel;
-          for (const log of remoteFuel) {
-            await driverRepository.saveFuelLog(log);
-          }
-        }
-      } catch (e) {
-        console.warn('[DriverService] Error fetching remote fuel history:', e);
+    if (options.forceRefresh) {
+      await revalidateVehicleHealth(candidateTruckId || undefined, true);
+      if (!resolvedTruckId) {
+        const refreshed = await driverRepository.getVehicleTelemetry();
+        if (refreshed?.truck_id) resolvedTruckId = refreshed.truck_id;
       }
+    } else if (!options.skipRevalidate) {
+      void revalidateVehicleHealth(candidateTruckId || undefined, false);
     }
 
-    let maintenanceLogs: MaintenanceServiceLogItem[] = [];
-    if (effectiveTruckId && networkSentinel.isOnline()) {
-      try {
-        const remoteLogs = await driverApi.fetchMaintenanceLogs(effectiveTruckId);
-        if (Array.isArray(remoteLogs)) {
-          maintenanceLogs = remoteLogs;
-        }
-      } catch (e) {
-        console.warn('[DriverService] Error fetching maintenance logs:', e);
-      }
-    }
+    const effectiveTruckId = resolvedTruckId || activeTrip?.truck_id || '';
+
+    const [telemetry, localFuel, localMaintenance] = await Promise.all([
+      effectiveTruckId ? driverRepository.getVehicleTelemetry(effectiveTruckId) : driverRepository.getVehicleTelemetry(),
+      (effectiveTruckId
+        ? driverRepository.getFuelLogs(effectiveTruckId)
+        : driverRepository.getFuelLogs()
+      ).catch(() => [] as FuelLog[]),
+      (effectiveTruckId
+        ? driverRepository.getMaintenanceLogs(effectiveTruckId)
+        : driverRepository.getMaintenanceLogs()
+      ).catch(() => [] as MaintenanceServiceLogItem[]),
+    ]);
 
     const defaultTelemetry: VehicleTelemetry = {
-      truck_id: effectiveTruckId,
+      truck_id: effectiveTruckId || telemetry?.truck_id || '',
       plate_number: activeTrip?.vehicle_plate || 'N/A',
       model: activeTrip?.truck_model || 'Delivery Truck',
       current_odometer: 0,
@@ -668,8 +691,8 @@ export const driverService = {
 
     return {
       telemetry: telemetry || defaultTelemetry,
-      fuelLogs: Array.isArray(fuelLogs) ? fuelLogs : [],
-      maintenanceLogs: Array.isArray(maintenanceLogs) ? maintenanceLogs : [],
+      fuelLogs: Array.isArray(localFuel) ? localFuel : [],
+      maintenanceLogs: Array.isArray(localMaintenance) ? localMaintenance : [],
     };
   },
 

@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import BottomNav from '../../components/navigation/BottomNav';
 import DashboardDesign from '../../../assets/svg/dashboard-bg.svg';
 import { salesService } from '../../services/salesService';
+import { dataRevalidator } from '../../services/dataRevalidator';
 import { syncScheduler } from '../../sync/syncScheduler';
 import { syncWorker } from '../../sync/syncWorker';
 import { driverRealtimeManager } from '../../realtime/driverRealtimeManager';
@@ -20,9 +21,9 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
     isOnline: true,
   });
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (options = {}) => {
     try {
-      const data = await salesService.getDashboardData(user?.id);
+      const data = await salesService.getDashboardData(user?.id, options);
       setDashboardData(data);
     } catch (err) {
       console.warn('[DashboardScreen] Failed to load dashboard data:', err);
@@ -35,9 +36,16 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
   useEffect(() => {
     loadData();
 
-    // Subscribe to sync scheduler updates to reactively refresh on sync completion
+    // Subscribe to sync scheduler updates to reactively refresh on sync completion (local read only)
     const unsubSync = syncScheduler.subscribe(() => {
-      loadData();
+      loadData({ skipRevalidate: true });
+    });
+
+    // Subscribe to background revalidation updates (local read only)
+    const unsubReval = dataRevalidator.subscribe(({ event }) => {
+      if (event === 'TRIP_UPDATED' || event === 'INVENTORY_UPDATED') {
+        loadData({ skipRevalidate: true });
+      }
     });
 
     // Subscribe to real-time dispatch and stock events to reload immediately
@@ -50,12 +58,13 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
         event === 'TRIP_CANCELLED' ||
         event === 'TRIP_RECONCILED'
       ) {
-        loadData();
+        loadData({ skipRevalidate: true });
       }
     });
 
     return () => {
       if (unsubSync) unsubSync();
+      if (unsubReval) unsubReval();
       if (unsubRealtime) unsubRealtime();
     };
   }, [loadData]);
@@ -69,7 +78,7 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
         // sync error handled internally
       }
     }
-    await loadData();
+    await loadData({ forceRefresh: true });
   }, [dashboardData.isOnline, loadData, user]);
 
   const activeTrip = dashboardData.trip;

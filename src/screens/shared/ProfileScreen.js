@@ -16,6 +16,7 @@ import EditProfileModal from '../../components/profile/EditProfileModal';
 import ProfileBg from '../../../assets/svg/profile-bg.svg';
 import { driverRepository, tripRepository } from '../../database';
 import { driverService } from '../../services/driverService';
+import { networkSentinel } from '../../sync/networkSentinel';
 import { userApi } from '../../api';
 import { authService } from '../../services/authService';
 import { resolveMediaUrl } from '../../utils/mediaResolver';
@@ -74,8 +75,10 @@ const ProfileScreen = ({
     }
   }, [user]);
 
-  // Hydrate latest profile from backend on mount
+  // Hydrate latest profile from backend in background if online
   useEffect(() => {
+    if (!networkSentinel.isOnline()) return;
+
     let isMounted = true;
     const fetchLatestProfile = async () => {
       try {

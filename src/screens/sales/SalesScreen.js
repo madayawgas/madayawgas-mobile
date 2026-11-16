@@ -20,6 +20,7 @@ import NewOrderScreen from './NewOrderScreen';
 import ConfirmOrderScreen from './ConfirmOrderScreen';
 import ReceiptScreen from './ReceiptScreen';
 import { salesService } from '../../services/salesService';
+import { dataRevalidator } from '../../services/dataRevalidator';
 import { customerRepository } from '../../database';
 import { useBackHandler } from '../../hooks/useBackHandler';
 
@@ -45,11 +46,11 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
   const [completedOrderData, setCompletedOrderData] = useState(null);
 
   // 1. Load active delivery trip context and available service zones with friendly names
-  const loadTripContext = useCallback(async () => {
+  const loadTripContext = useCallback(async (options = {}) => {
     try {
       const [trip, allZones, custZones] = await Promise.all([
-        salesService.resolveActiveTripForUser(),
-        salesService.syncZones(),
+        salesService.resolveActiveTripForUser(undefined, options),
+        salesService.syncZones(options),
         customerRepository.getAvailableZones(),
       ]);
       setActiveTrip(trip);
@@ -73,15 +74,15 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
     }
   }, []);
 
-  // 2. Load customer catalog and products
-  const loadData = useCallback(async (zoneIdOverride, sortOverride) => {
+  // 2. Load customer catalog and products (Local-First; searchQuery is filtered in-memory without remote calls)
+  const loadData = useCallback(async (zoneIdOverride, sortOverride, options = {}) => {
     try {
       const effectiveZone = zoneIdOverride !== undefined ? zoneIdOverride : selectedZoneFilter;
       const effectiveSort = sortOverride !== undefined ? sortOverride : sortOrder;
 
       const [customerRes, productData] = await Promise.all([
-        salesService.getCustomers(effectiveZone, searchQuery, effectiveSort),
-        salesService.getProductCatalog(),
+        salesService.getCustomers(effectiveZone, undefined, effectiveSort, options),
+        salesService.getProductCatalog(options),
       ]);
 
       setCustomers(customerRes?.customers || []);
@@ -92,21 +93,36 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [searchQuery, selectedZoneFilter, sortOrder]);
+  }, [selectedZoneFilter, sortOrder]);
 
-  // Initial load
+  // Initial load + reactive background revalidation listener
   useEffect(() => {
-    const init = async () => {
-      await loadTripContext();
-      await loadData();
+    loadTripContext();
+    loadData();
+
+    const unsubReval = dataRevalidator.subscribe(({ event }) => {
+      if (event === 'TRIP_UPDATED' || event === 'ZONES_UPDATED') {
+        loadTripContext({ skipRevalidate: true });
+      }
+      if (
+        event === 'CUSTOMERS_UPDATED' ||
+        event === 'CATALOG_UPDATED' ||
+        event === 'INVENTORY_UPDATED' ||
+        event === 'TRIP_UPDATED'
+      ) {
+        loadData(undefined, undefined, { skipRevalidate: true });
+      }
+    });
+
+    return () => {
+      unsubReval();
     };
-    init();
   }, [loadTripContext, loadData]);
 
-  // Reload data when zone filter or sort order changes
+  // Reload data strictly from local SQLite when zone filter or sort order changes
   const handleZoneFilterChange = (newZone) => {
     setSelectedZoneFilter(newZone);
-    loadData(newZone, sortOrder);
+    loadData(newZone, sortOrder, { skipRevalidate: true });
   };
 
   const handleToggleSort = () => {
@@ -116,13 +132,13 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
     else nextSort = 'ASC';
 
     setSortOrder(nextSort);
-    loadData(selectedZoneFilter, nextSort);
+    loadData(selectedZoneFilter, nextSort, { skipRevalidate: true });
   };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadTripContext();
-    await loadData();
+    await loadTripContext({ forceRefresh: true });
+    await loadData(undefined, undefined, { forceRefresh: true });
   }, [loadData, loadTripContext]);
 
   // Search filtering in UI
