@@ -1,5 +1,6 @@
 import { UserSession } from '@/types';
 import { authApi } from '../api/endpoints/authApi';
+import { setActiveDatabaseUser } from '@/database';
 import {
   sessionStore,
   AuthSessionListener,
@@ -25,6 +26,7 @@ export const authService = {
       throw new Error('Invalid authentication response structure');
     }
     const token = authResult.token || `session-${authResult.user.id}`;
+    await setActiveDatabaseUser(authResult.user.id);
     return sessionStore.saveSession(authResult.user, token);
   },
 
@@ -62,7 +64,8 @@ export const authService = {
    * Revocation calls are debounced to prevent duplicate alerts from concurrent requests.
    */
   async clearSession(reason: AuthSessionReason = 'logout'): Promise<void> {
-    return sessionStore.clearSession(reason);
+    await sessionStore.clearSession(reason);
+    await setActiveDatabaseUser(null);
   },
 
   /**

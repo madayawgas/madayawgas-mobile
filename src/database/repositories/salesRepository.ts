@@ -60,18 +60,17 @@ export const salesRepository = {
     const { order, items, canisterEntries, inventoryDeductions, customerDebtChange, syncQueueItem } = params;
 
     await db.withExclusiveTransactionAsync(async (txn) => {
-      // 1. Insert Sales Order
+      // 1. Insert Sales Order (3NF: customer_name resolved via local_customers)
       await txn.runAsync(
         `INSERT INTO local_sales_orders (
-          id, transaction_no, trip_id, customer_id, customer_name, receipt_number,
+          id, transaction_no, trip_id, customer_id, receipt_number,
           total_amount, payment_method, payment_reference, transacted_at, synced_at, sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         [
           order.id,
           order.transaction_no,
           order.trip_id,
           order.customer_id,
-          order.customer_name || null,
           order.receipt_number,
           order.total_amount,
           order.payment_method,
@@ -82,18 +81,22 @@ export const salesRepository = {
         ]
       );
 
-      // 2. Insert Line Items
+      // 2. Insert Line Items (3NF: ensure product exists in catalog, product_name resolved via JOIN)
       for (const item of items) {
         await txn.runAsync(
+          `INSERT OR IGNORE INTO local_product_catalog (product_id, name, price, is_active)
+           VALUES (?, ?, ?, 1);`,
+          [item.product_id, item.product_name || 'Gas Product', item.unit_price]
+        );
+        await txn.runAsync(
           `INSERT INTO local_sales_items (
-            id, sales_order_id, product_id, product_name, quantity_sold,
+            id, sales_order_id, product_id, quantity_sold,
             empties_returned, empties_defective, unit_price, subtotal
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
           [
             item.id,
             item.sales_order_id,
             item.product_id,
-            item.product_name || null,
             item.quantity_sold,
             item.empties_returned,
             item.empties_defective,
@@ -184,9 +187,11 @@ export const salesRepository = {
     return db.getAllAsync<SalesOrder>(
       `SELECT
          o.*,
+         COALESCE(NULLIF(c.business_name, ''), c.contact_person, 'Customer') AS customer_name,
          COALESCE(SUM(i.quantity_sold), 0) AS total_items_sold,
          COALESCE(SUM(i.empties_returned), 0) AS total_empties_returned
        FROM local_sales_orders o
+       LEFT JOIN local_customers c ON c.id = o.customer_id
        LEFT JOIN local_sales_items i ON i.sales_order_id = o.id
        WHERE o.trip_id = ?
        GROUP BY o.id
@@ -199,9 +204,13 @@ export const salesRepository = {
   async getOrdersByCustomerId(customerId: string): Promise<SalesOrder[]> {
     const db = await getDatabase();
     return db.getAllAsync<SalesOrder>(
-      `SELECT * FROM local_sales_orders
-       WHERE customer_id = ?
-       ORDER BY transacted_at DESC;`,
+      `SELECT
+         o.*,
+         COALESCE(NULLIF(c.business_name, ''), c.contact_person, 'Customer') AS customer_name
+       FROM local_sales_orders o
+       LEFT JOIN local_customers c ON c.id = o.customer_id
+       WHERE o.customer_id = ?
+       ORDER BY o.transacted_at DESC;`,
       [customerId]
     );
   },
@@ -209,14 +218,24 @@ export const salesRepository = {
   async getOrderWithItems(orderId: string): Promise<{ order: SalesOrder | null; items: SalesOrderItem[] }> {
     const db = await getDatabase();
     const order = await db.getFirstAsync<SalesOrder>(
-      'SELECT * FROM local_sales_orders WHERE id = ?;',
+      `SELECT
+         o.*,
+         COALESCE(NULLIF(c.business_name, ''), c.contact_person, 'Customer') AS customer_name
+       FROM local_sales_orders o
+       LEFT JOIN local_customers c ON c.id = o.customer_id
+       WHERE o.id = ?;`,
       [orderId]
     );
     if (!order) {
       return { order: null, items: [] };
     }
     const items = await db.getAllAsync<SalesOrderItem>(
-      'SELECT * FROM local_sales_items WHERE sales_order_id = ?;',
+      `SELECT
+         i.*,
+         COALESCE(p.name, 'Gas Product') AS product_name
+       FROM local_sales_items i
+       LEFT JOIN local_product_catalog p ON p.product_id = i.product_id
+       WHERE i.sales_order_id = ?;`,
       [orderId]
     );
     return { order, items };

@@ -53,10 +53,7 @@ const TransactionDetailsModal = ({
 
   return (
     <BottomSheetModal visible={visible} onClose={onClose} maxHeight="85%">
-      <View className="bg-white rounded-t-3xl px-5 pt-3 pb-7 shadow-2xl">
-        {/* Drag Handle */}
-        <View className="w-10 h-1 bg-slate-200 rounded-full self-center mb-4" />
-
+      <View className="bg-white rounded-t-3xl px-5 pt-7 pb-7 shadow-2xl">
         {/* Header */}
         <View className="flex-row justify-between items-start mb-4">
           <View className="flex-1 pr-3">

@@ -3,15 +3,13 @@ import {
   View,
   Text,
   TouchableOpacity,
-  ScrollView,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import InputField from '../../components/ui/InputField';
 import PasswordField from '../../components/ui/PasswordField';
 import PrimaryButton from '../../components/ui/PrimaryButton';
+import KeyboardAwareScrollView from '../../components/ui/KeyboardAwareScrollView';
 import LoginDesign from '../../../assets/svg/login-bg.svg';
 import Logo2 from '../../../assets/svg/logo2.svg';
 import { authService } from '../../services/authService';
@@ -79,17 +77,11 @@ const LoginScreen = ({ onLogin }) => {
 
   return (
     <SafeAreaView className="flex-1 bg-white" edges={['bottom']}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      <KeyboardAwareScrollView
         className="flex-1 bg-white"
+        extraBottomPadding={32}
+        contentContainerStyle={{ flexGrow: 1 }}
       >
-        <ScrollView
-          className="flex-1 bg-white"
-          bounces={false}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ flexGrow: 1 }}
-        >
           {/* Top Header Section with SVGs */}
           <View className="relative w-full h-72 bg-white">
             <View className="absolute top-0 left-0 right-0 bottom-0 w-full">
@@ -166,8 +158,7 @@ const LoginScreen = ({ onLogin }) => {
               </TouchableOpacity>
             </View>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 };

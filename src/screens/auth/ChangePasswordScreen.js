@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import PasswordField from '../../components/ui/PasswordField';
 import PrimaryButton from '../../components/ui/PrimaryButton';
+import KeyboardAwareScrollView from '../../components/ui/KeyboardAwareScrollView';
 import LoginDesign from '../../../assets/svg/login-bg.svg';
 import Logo2 from '../../../assets/svg/logo2.svg';
 import { authService } from '../../services/authService';
@@ -100,16 +101,11 @@ const ChangePasswordScreen = ({ user, onLogout }) => {
   const username = user?.username || 'User';
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    <KeyboardAwareScrollView
       className="flex-1 bg-white"
+      extraBottomPadding={40}
+      contentContainerStyle={{ flexGrow: 1, paddingBottom: 40 }}
     >
-      <ScrollView
-        className="flex-1 bg-white"
-        bounces={false}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ flexGrow: 1, paddingBottom: 40 }}
-      >
         {/* Header Branding */}
         <View className="relative w-full h-56 bg-white">
           <View className="absolute top-0 left-0 right-0 bottom-0 w-full">
@@ -221,8 +217,7 @@ const ChangePasswordScreen = ({ user, onLogout }) => {
             />
           </View>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardAwareScrollView>
   );
 };
 

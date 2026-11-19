@@ -5,14 +5,32 @@ export const inventoryRepository = {
   async getAllInventory(): Promise<VehicleInventory[]> {
     const db = await getDatabase();
     return db.getAllAsync<VehicleInventory>(
-      'SELECT * FROM local_vehicle_inventory ORDER BY product_name ASC;'
+      `SELECT
+         i.product_id,
+         p.sku,
+         COALESCE(p.name, 'Gas Product') AS product_name,
+         i.quantity_loaded,
+         i.quantity_sold,
+         i.quantity_remaining
+       FROM local_vehicle_inventory i
+       LEFT JOIN local_product_catalog p ON p.product_id = i.product_id
+       ORDER BY product_name ASC;`
     );
   },
 
   async getInventoryByProductId(productId: string): Promise<VehicleInventory | null> {
     const db = await getDatabase();
     const row = await db.getFirstAsync<VehicleInventory>(
-      'SELECT * FROM local_vehicle_inventory WHERE product_id = ?;',
+      `SELECT
+         i.product_id,
+         p.sku,
+         COALESCE(p.name, 'Gas Product') AS product_name,
+         i.quantity_loaded,
+         i.quantity_sold,
+         i.quantity_remaining
+       FROM local_vehicle_inventory i
+       LEFT JOIN local_product_catalog p ON p.product_id = i.product_id
+       WHERE i.product_id = ?;`,
       [productId]
     );
     return row || null;
@@ -28,7 +46,15 @@ export const inventoryRepository = {
     let hasChanges = false;
     await db.withExclusiveTransactionAsync(async (txn) => {
       const existingRows = await txn.getAllAsync<VehicleInventory>(
-        'SELECT product_id, sku, product_name, quantity_loaded, quantity_sold, quantity_remaining FROM local_vehicle_inventory;'
+        `SELECT
+           i.product_id,
+           p.sku,
+           p.name AS product_name,
+           i.quantity_loaded,
+           i.quantity_sold,
+           i.quantity_remaining
+         FROM local_vehicle_inventory i
+         LEFT JOIN local_product_catalog p ON p.product_id = i.product_id;`
       );
       const existingMap = new Map<string, VehicleInventory>();
       for (const row of existingRows) {
@@ -74,19 +100,24 @@ export const inventoryRepository = {
         }
 
         await txn.runAsync(
+          `INSERT INTO local_product_catalog (product_id, sku, name, price, is_active)
+           VALUES (?, ?, ?, 0, 1)
+           ON CONFLICT(product_id) DO UPDATE SET
+             sku = COALESCE(excluded.sku, local_product_catalog.sku),
+             name = COALESCE(NULLIF(excluded.name, ''), local_product_catalog.name);`,
+          [item.productId, item.sku || null, item.productName || 'Gas Product']
+        );
+
+        await txn.runAsync(
           `INSERT INTO local_vehicle_inventory (
-            product_id, sku, product_name, quantity_loaded, quantity_sold, quantity_remaining
-          ) VALUES (?, ?, ?, ?, ?, ?)
+            product_id, quantity_loaded, quantity_sold, quantity_remaining
+          ) VALUES (?, ?, ?, ?)
           ON CONFLICT(product_id) DO UPDATE SET
-            sku = excluded.sku,
-            product_name = excluded.product_name,
             quantity_loaded = excluded.quantity_loaded,
             quantity_sold = excluded.quantity_sold,
             quantity_remaining = excluded.quantity_remaining;`,
           [
             item.productId,
-            item.sku || null,
-            item.productName,
             loadedUnits,
             soldUnits,
             remainingUnits,
@@ -187,13 +218,19 @@ export const inventoryRepository = {
       await txn.runAsync('DELETE FROM local_vehicle_inventory;');
       for (const item of items) {
         await txn.runAsync(
+          `INSERT INTO local_product_catalog (product_id, sku, name, price, is_active)
+           VALUES (?, ?, ?, 0, 1)
+           ON CONFLICT(product_id) DO UPDATE SET
+             sku = COALESCE(excluded.sku, local_product_catalog.sku),
+             name = COALESCE(NULLIF(excluded.name, ''), local_product_catalog.name);`,
+          [item.product_id, item.sku || null, item.product_name || 'Gas Product']
+        );
+        await txn.runAsync(
           `INSERT INTO local_vehicle_inventory (
-            product_id, sku, product_name, quantity_loaded, quantity_sold, quantity_remaining
-          ) VALUES (?, ?, ?, ?, ?, ?);`,
+            product_id, quantity_loaded, quantity_sold, quantity_remaining
+          ) VALUES (?, ?, ?, ?);`,
           [
             item.product_id,
-            item.sku || null,
-            item.product_name,
             item.quantity_loaded,
             item.quantity_sold,
             item.quantity_remaining,

@@ -9,34 +9,40 @@ import {
 
 export const driverRepository = {
   // ==========================================
-  // 1. Vehicle Telemetry & 5,000-km PM
+  // 1. Vehicle Telemetry & 5,000-km PM (3NF)
   // ==========================================
-  async getVehicleTelemetry(truckId?: string): Promise<VehicleTelemetry | null> {
+  async getVehicleTelemetry(truckId?: string, driverId?: string): Promise<VehicleTelemetry | null> {
     const db = await getDatabase();
-    const row = truckId
-      ? await db.getFirstAsync<{
-          truck_id: string;
-          plate_number: string;
-          model: string;
-          current_odometer: number;
-          last_pm_odometer: number;
-          status: string;
-          last_serviced_at: string | null;
-        }>(
-          `SELECT * FROM local_vehicle_telemetry WHERE truck_id = ? LIMIT 1;`,
-          [truckId]
-        )
-      : await db.getFirstAsync<{
-          truck_id: string;
-          plate_number: string;
-          model: string;
-          current_odometer: number;
-          last_pm_odometer: number;
-          status: string;
-          last_serviced_at: string | null;
-        }>(
-          `SELECT * FROM local_vehicle_telemetry ORDER BY rowid DESC LIMIT 1;`
-        );
+    type VehicleRow = {
+      truck_id: string;
+      plate_number: string;
+      model: string;
+      current_odometer: number;
+      last_pm_odometer: number;
+      status: string;
+      last_serviced_at: string | null;
+    };
+
+    let row: VehicleRow | null = null;
+    if (truckId) {
+      row = await db.getFirstAsync<VehicleRow>(
+        `SELECT * FROM local_vehicles WHERE truck_id = ? LIMIT 1;`,
+        [truckId]
+      );
+    } else if (driverId) {
+      row = await db.getFirstAsync<VehicleRow>(
+        `SELECT v.*
+         FROM local_vehicles v
+         INNER JOIN local_driver_vehicle_assignments a ON a.truck_id = v.truck_id
+         WHERE a.driver_id = ?
+         LIMIT 1;`,
+        [driverId]
+      );
+    } else {
+      row = await db.getFirstAsync<VehicleRow>(
+        `SELECT * FROM local_vehicles ORDER BY rowid DESC LIMIT 1;`
+      );
+    }
 
     if (!row) return null;
 
@@ -58,9 +64,14 @@ export const driverRepository = {
     };
   },
 
-  async saveVehicleTelemetry(telemetry: Omit<VehicleTelemetry, 'isPmDue' | 'distanceSinceLastPm' | 'remainingKmBeforePm'>): Promise<boolean> {
+  async saveVehicleTelemetry(
+    telemetry: Omit<VehicleTelemetry, 'isPmDue' | 'distanceSinceLastPm' | 'remainingKmBeforePm'>,
+    driverId?: string,
+    driverName?: string
+  ): Promise<boolean> {
     const db = await getDatabase();
     let hasChanges = false;
+    const now = new Date().toISOString();
 
     await db.withExclusiveTransactionAsync(async (txn) => {
       const existing = await txn.getFirstAsync<{
@@ -72,7 +83,7 @@ export const driverRepository = {
         status: string;
         last_serviced_at: string | null;
       }>(
-        'SELECT truck_id, plate_number, model, current_odometer, last_pm_odometer, status, last_serviced_at FROM local_vehicle_telemetry WHERE truck_id = ?;',
+        'SELECT truck_id, plate_number, model, current_odometer, last_pm_odometer, status, last_serviced_at FROM local_vehicles WHERE truck_id = ?;',
         [telemetry.truck_id]
       );
 
@@ -103,7 +114,7 @@ export const driverRepository = {
       }
 
       await txn.runAsync(
-        `INSERT INTO local_vehicle_telemetry (
+        `INSERT INTO local_vehicles (
           truck_id, plate_number, model, current_odometer, last_pm_odometer, status, last_serviced_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(truck_id) DO UPDATE SET
@@ -123,15 +134,50 @@ export const driverRepository = {
           telemetry.last_serviced_at || null,
         ]
       );
+
+      if (driverId) {
+        await txn.runAsync(
+          `INSERT INTO local_users (id, full_name, role, updated_at)
+           VALUES (?, ?, 'DRIVER', ?)
+           ON CONFLICT(id) DO UPDATE SET
+             full_name = COALESCE(NULLIF(excluded.full_name, ''), local_users.full_name),
+             updated_at = excluded.updated_at;`,
+          [driverId, driverName || 'Driver', now]
+        );
+        const prevAssignment = await txn.getFirstAsync<{ truck_id: string }>(
+          'SELECT truck_id FROM local_driver_vehicle_assignments WHERE driver_id = ?;',
+          [driverId]
+        );
+        if (!prevAssignment || prevAssignment.truck_id !== telemetry.truck_id) {
+          hasChanges = true;
+        }
+        await txn.runAsync(
+          `INSERT INTO local_driver_vehicle_assignments (driver_id, truck_id, assigned_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(driver_id) DO UPDATE SET
+             truck_id = excluded.truck_id,
+             assigned_at = excluded.assigned_at;`,
+          [driverId, telemetry.truck_id, now]
+        );
+      }
     });
 
     return hasChanges;
   },
 
+  async clearDriverVehicleAssignment(driverId: string): Promise<boolean> {
+    const db = await getDatabase();
+    const res = await db.runAsync(
+      'DELETE FROM local_driver_vehicle_assignments WHERE driver_id = ?;',
+      [driverId]
+    );
+    return (res.changes || 0) > 0;
+  },
+
   async updateOdometer(truckId: string, newOdometer: number): Promise<void> {
     const db = await getDatabase();
     await db.runAsync(
-      `UPDATE local_vehicle_telemetry SET current_odometer = ? WHERE truck_id = ?;`,
+      `UPDATE local_vehicles SET current_odometer = ? WHERE truck_id = ?;`,
       [newOdometer, truckId]
     );
   },
@@ -173,30 +219,36 @@ export const driverRepository = {
 
   async saveFuelLog(log: FuelLog): Promise<void> {
     const db = await getDatabase();
-    await db.runAsync(
-      `INSERT INTO local_fuel_logs (
-        id, truck_id, driver_id, liters, total_cost, odometer, receipt_photo_uri, logged_at, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        liters = excluded.liters,
-        total_cost = excluded.total_cost,
-        odometer = excluded.odometer,
-        receipt_photo_uri = COALESCE(excluded.receipt_photo_uri, local_fuel_logs.receipt_photo_uri),
-        logged_at = excluded.logged_at,
-        synced = excluded.synced
-      WHERE local_fuel_logs.synced = 1;`,
-      [
-        log.id,
-        log.truck_id,
-        log.driver_id,
-        log.liters,
-        log.total_cost,
-        log.odometer,
-        log.receipt_photo_uri || null,
-        log.logged_at,
-        log.synced ? 1 : 0,
-      ]
-    );
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      await txn.runAsync(
+        `INSERT OR IGNORE INTO local_vehicles (truck_id, plate_number, model) VALUES (?, 'N/A', 'Delivery Truck');`,
+        [log.truck_id]
+      );
+      await txn.runAsync(
+        `INSERT INTO local_fuel_logs (
+          id, truck_id, driver_id, liters, total_cost, odometer, receipt_photo_uri, logged_at, synced
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          liters = excluded.liters,
+          total_cost = excluded.total_cost,
+          odometer = excluded.odometer,
+          receipt_photo_uri = COALESCE(excluded.receipt_photo_uri, local_fuel_logs.receipt_photo_uri),
+          logged_at = excluded.logged_at,
+          synced = excluded.synced
+        WHERE local_fuel_logs.synced = 1;`,
+        [
+          log.id,
+          log.truck_id,
+          log.driver_id,
+          log.liters,
+          log.total_cost,
+          log.odometer,
+          log.receipt_photo_uri || null,
+          log.logged_at,
+          log.synced ? 1 : 0,
+        ]
+      );
+    });
   },
 
   async upsertFuelLogs(logs: FuelLog[]): Promise<boolean> {
@@ -206,6 +258,10 @@ export const driverRepository = {
     await db.withExclusiveTransactionAsync(async (txn) => {
       for (const log of logs) {
         if (!log?.id) continue;
+        await txn.runAsync(
+          `INSERT OR IGNORE INTO local_vehicles (truck_id, plate_number, model) VALUES (?, 'N/A', 'Delivery Truck');`,
+          [log.truck_id]
+        );
         const existing = await txn.getFirstAsync<{
           id: string;
           liters: number;
@@ -286,6 +342,10 @@ export const driverRepository = {
     const db = await getDatabase();
     let hasChanges = false;
     await db.withExclusiveTransactionAsync(async (txn) => {
+      await txn.runAsync(
+        `INSERT OR IGNORE INTO local_vehicles (truck_id, plate_number, model) VALUES (?, 'N/A', 'Delivery Truck');`,
+        [truckId]
+      );
       const existingRows = await txn.getAllAsync<{
         id: string;
         service_type: string | null;
@@ -399,23 +459,29 @@ export const driverRepository = {
 
   async saveApprehension(report: ApprehensionReport): Promise<void> {
     const db = await getDatabase();
-    await db.runAsync(
-      `INSERT INTO local_apprehensions (
-        id, truck_id, driver_id, agency, citation_number, violation_notes, fine_amount, ticket_photo_uri, reported_at, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-      [
-        report.id,
-        report.truck_id,
-        report.driver_id,
-        report.agency,
-        report.citation_number || null,
-        report.violation_notes,
-        report.fine_amount || null,
-        report.ticket_photo_uri,
-        report.reported_at,
-        report.synced ? 1 : 0,
-      ]
-    );
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      await txn.runAsync(
+        `INSERT OR IGNORE INTO local_vehicles (truck_id, plate_number, model) VALUES (?, 'N/A', 'Delivery Truck');`,
+        [report.truck_id]
+      );
+      await txn.runAsync(
+        `INSERT INTO local_apprehensions (
+          id, truck_id, driver_id, agency, citation_number, violation_notes, fine_amount, ticket_photo_uri, reported_at, synced
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          report.id,
+          report.truck_id,
+          report.driver_id,
+          report.agency,
+          report.citation_number || null,
+          report.violation_notes,
+          report.fine_amount || null,
+          report.ticket_photo_uri,
+          report.reported_at,
+          report.synced ? 1 : 0,
+        ]
+      );
+    });
   },
 
   // ==========================================
@@ -423,22 +489,28 @@ export const driverRepository = {
   // ==========================================
   async saveVehicleIssue(issue: VehicleIssueReport): Promise<void> {
     const db = await getDatabase();
-    await db.runAsync(
-      `INSERT INTO local_incidents (
-        id, truck_id, driver_id, incident_type, description, severity, photo_uri, reported_at, synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-      [
-        issue.id,
-        issue.truck_id,
-        issue.driver_id,
-        issue.incident_type,
-        issue.description,
-        issue.severity,
-        issue.photo_uri || null,
-        issue.reported_at,
-        issue.synced ? 1 : 0,
-      ]
-    );
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      await txn.runAsync(
+        `INSERT OR IGNORE INTO local_vehicles (truck_id, plate_number, model) VALUES (?, 'N/A', 'Delivery Truck');`,
+        [issue.truck_id]
+      );
+      await txn.runAsync(
+        `INSERT INTO local_incidents (
+          id, truck_id, driver_id, incident_type, description, severity, photo_uri, reported_at, synced
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          issue.id,
+          issue.truck_id,
+          issue.driver_id,
+          issue.incident_type,
+          issue.description,
+          issue.severity,
+          issue.photo_uri || null,
+          issue.reported_at,
+          issue.synced ? 1 : 0,
+        ]
+      );
+    });
   },
 
   // ==========================================

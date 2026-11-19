@@ -4,6 +4,7 @@ import {
   driverRepository,
   tripRepository,
   syncQueueRepository,
+  getActiveDatabaseUser,
 } from '@/database';
 import { driverApi, tripApi } from '@/api';
 import { UUID_REGEX } from '@/api/endpoints/driverApi';
@@ -102,25 +103,44 @@ async function revalidateDriverDashboard(user: UserSession, force: boolean): Pro
         console.warn('[DriverService] Background assignment revalidation warning:', e);
       }
 
+      const userDisplayName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.username || 'Driver';
       try {
         const myVehicle = await driverApi.fetchMyVehicle();
         if (!(await isSessionStillValid())) return;
         if (myVehicle) {
-          const changed = await driverRepository.saveVehicleTelemetry(myVehicle);
+          const changed = await driverRepository.saveVehicleTelemetry(myVehicle, user.id, userDisplayName);
           if (changed) {
             dataRevalidator.emit('TELEMETRY_UPDATED');
           }
+        } else {
+          const cleared = await driverRepository.clearDriverVehicleAssignment(user.id);
+          if (cleared) {
+            dataRevalidator.emit('TELEMETRY_UPDATED');
+          }
         }
-      } catch (e) {
-        console.warn('[DriverService] Background fetchMyVehicle warning:', e);
+      } catch (e: any) {
+        const isUnassigned = e?.status === 404 || String(e?.message || '').includes('No assigned vehicle');
+        if (isUnassigned && (await isSessionStillValid())) {
+          const cleared = await driverRepository.clearDriverVehicleAssignment(user.id);
+          if (cleared) {
+            dataRevalidator.emit('TELEMETRY_UPDATED');
+          }
+        } else {
+          console.warn('[DriverService] Background fetchMyVehicle warning:', e);
+        }
       }
     },
     { force }
   );
 }
 
-async function revalidateVehicleHealth(truckId: string | undefined, force: boolean): Promise<void> {
-  const key = `driver:health:${truckId || 'default'}`;
+async function revalidateVehicleHealth(
+  truckId: string | undefined,
+  force: boolean,
+  driverId?: string,
+  driverName?: string
+): Promise<void> {
+  const key = `driver:health:${truckId || driverId || 'default'}`;
   await dataRevalidator.run(
     key,
     async ({ isSessionStillValid }) => {
@@ -130,13 +150,26 @@ async function revalidateVehicleHealth(truckId: string | undefined, force: boole
         if (!(await isSessionStillValid())) return;
         if (myVehicle) {
           resolvedTruckId = myVehicle.truck_id || resolvedTruckId;
-          const changed = await driverRepository.saveVehicleTelemetry(myVehicle);
+          const changed = await driverRepository.saveVehicleTelemetry(myVehicle, driverId, driverName);
           if (changed) {
             dataRevalidator.emit('TELEMETRY_UPDATED');
           }
+        } else if (driverId) {
+          const cleared = await driverRepository.clearDriverVehicleAssignment(driverId);
+          if (cleared) {
+            dataRevalidator.emit('TELEMETRY_UPDATED');
+          }
         }
-      } catch (e) {
-        console.warn('[DriverService] Background vehicle telemetry warning:', e);
+      } catch (e: any) {
+        const isUnassigned = e?.status === 404 || String(e?.message || '').includes('No assigned vehicle');
+        if (isUnassigned && driverId && (await isSessionStillValid())) {
+          const cleared = await driverRepository.clearDriverVehicleAssignment(driverId);
+          if (cleared) {
+            dataRevalidator.emit('TELEMETRY_UPDATED');
+          }
+        } else {
+          console.warn('[DriverService] Background vehicle telemetry warning:', e);
+        }
       }
 
       if (!resolvedTruckId) return;
@@ -192,7 +225,7 @@ export const driverService = {
       activeTrip = null;
     }
 
-    let telemetry = await driverRepository.getVehicleTelemetry();
+    let telemetry = await driverRepository.getVehicleTelemetry(undefined, user.id);
     if (!telemetry) {
       telemetry = {
         truck_id: activeTrip?.truck_id || '',
@@ -641,9 +674,10 @@ export const driverService = {
     truckId?: string,
     options: LocalFirstReadOptions = {}
   ): Promise<VehicleHealthData> {
+    const activeDriverId = getActiveDatabaseUser() || undefined;
     let resolvedTruckId = truckId;
     if (!resolvedTruckId) {
-      const cached = await driverRepository.getVehicleTelemetry();
+      const cached = await driverRepository.getVehicleTelemetry(undefined, activeDriverId);
       if (cached?.truck_id) {
         resolvedTruckId = cached.truck_id;
       }
@@ -653,19 +687,21 @@ export const driverService = {
     const candidateTruckId = resolvedTruckId || activeTrip?.truck_id || '';
 
     if (options.forceRefresh) {
-      await revalidateVehicleHealth(candidateTruckId || undefined, true);
+      await revalidateVehicleHealth(candidateTruckId || undefined, true, activeDriverId);
       if (!resolvedTruckId) {
-        const refreshed = await driverRepository.getVehicleTelemetry();
+        const refreshed = await driverRepository.getVehicleTelemetry(undefined, activeDriverId);
         if (refreshed?.truck_id) resolvedTruckId = refreshed.truck_id;
       }
     } else if (!options.skipRevalidate) {
-      void revalidateVehicleHealth(candidateTruckId || undefined, false);
+      void revalidateVehicleHealth(candidateTruckId || undefined, false, activeDriverId);
     }
 
     const effectiveTruckId = resolvedTruckId || activeTrip?.truck_id || '';
 
     const [telemetry, localFuel, localMaintenance] = await Promise.all([
-      effectiveTruckId ? driverRepository.getVehicleTelemetry(effectiveTruckId) : driverRepository.getVehicleTelemetry(),
+      effectiveTruckId
+        ? driverRepository.getVehicleTelemetry(effectiveTruckId)
+        : driverRepository.getVehicleTelemetry(undefined, activeDriverId),
       (effectiveTruckId
         ? driverRepository.getFuelLogs(effectiveTruckId)
         : driverRepository.getFuelLogs()

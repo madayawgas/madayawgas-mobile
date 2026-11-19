@@ -37,26 +37,29 @@ This is an Expo/React Native mobile application for MadayawGas Direct Store Deli
 - **React Compiler & New Architecture**: Default New Architecture enabled with React Compiler optimizations (`experiments.reactCompiler: true`).
 - **Dependencies Management**: All native modules strictly pinned and validated against SDK 58 via `npx expo-doctor` and `npx expo install --check`.
 
-### Local SQLite Database (`madayawgas.db`)
-- Created and accessed asynchronously via `expo-sqlite` with **WAL mode**, foreign keys enabled, and `PRAGMA busy_timeout = 5000;` to ensure transaction concurrency resilience (`src/database/connection.ts`). In-flight promise deduplication (`activeDashboardPromise`) protects against simultaneous query locks.
-- **Core Schema Tables (`src/database/schema.ts`)**:
-  - `local_active_trip`: Active shift metadata (`trip_id`, `trip_number`, `vehicle_plate`, `driver_name`, `sales_user_id`, `zone_id`, `status`, `dispatched_at`, `truck_id`, `truck_model`, `driver_id`, `sales_user_name`, `zone_name`).
-  - `local_vehicle_inventory`: Truck loaded stock counters (`quantity_loaded`, `quantity_sold`, `quantity_remaining`).
-  - `local_customers`: Zone customer directory (`id`, `name`, `store_name`, `address`, `phone`, `current_debt`, `zone_id`, `business_name`, `contact_person`, `contact_number`, `delivery_address`, `customer_type`, `canister_debt`, `is_locally_created`, `created_at`).
-  - `local_sales_orders`: In-field sales records (`id`, `transaction_no`, `customer_id`, `customer_name`, `receipt_number`, `trip_id`, `total_amount`, `payment_method`, `payment_reference`, `transacted_at`, `synced_at`, `sync_status`, `error_code`, `error_message`).
-  - `local_sales_items`: Line items for sales (`id`, `sales_order_id`, `product_id`, `product_name`, `quantity_sold`, `empties_returned`, `empties_defective`, `unit_price`, `subtotal`).
-  - `local_canister_ledger`: Append-only tracking of cylinder swaps and loaned canisters.
+### Local SQLite Database (Per-Account Isolated, 3NF Normalized `SCHEMA_VERSION = 2`)
+- Created and accessed asynchronously via `expo-sqlite` with **WAL mode**, foreign keys enabled, and `PRAGMA busy_timeout = 5000;` (`src/database/connection.ts`).
+- **Per-Account Database Isolation (`setActiveDatabaseUser`)**: Each authenticated user gets an isolated SQLite file (`madayawgas_<sanitizedUserId>.db`, or `madayawgas_guest.db` when logged out). Switching accounts closes the previous handle cleanly so data never bleeds across logins while preserving each user's offline queue. Legacy v1 databases migrate automatically to 3NF via `PRAGMA user_version`.
+- **3NF Core Schema Tables (`src/database/schema.ts`)**:
+  - `local_users`: Canonical user identity cache (`id`, `full_name`, `role`, `updated_at`) for trip and driver-assignment FKs.
+  - `local_vehicles`: Distance-based 5,000-km PM and odometer telemetry (`truck_id`, `plate_number`, `model`, `current_odometer`, `last_pm_odometer`, `status`, `last_serviced_at`).
+  - `local_driver_vehicle_assignments`: 1:1 driver-to-vehicle assignment (`driver_id` PK -> `local_users`, `truck_id` -> `local_vehicles`, `assigned_at`), cleared automatically when backend confirms a driver is unassigned.
+  - `local_active_trip`: Normalized active shift metadata (`trip_id`, `trip_number`, `truck_id`, `driver_id`, `sales_user_id`, `zone_id`, `status`, `dispatched_at`); vehicle, user, and zone names are resolved via `JOIN` in `tripRepository`.
+  - `local_vehicle_inventory`: Truck loaded stock counters (`product_id` FK -> `local_product_catalog`, `quantity_loaded`, `quantity_sold`, `quantity_remaining`); `sku` and `product_name` resolved via `JOIN` in `inventoryRepository`.
+  - `local_customers`: Zone customer directory (`id`, `business_name`, `contact_person`, `contact_number`, `delivery_address`, `customer_type`, `zone_id` FK -> `local_service_zones`, `canister_debt`, `is_locally_created`, `created_at`).
+  - `local_sales_orders`: In-field sales records (`id`, `transaction_no`, `customer_id` FK -> `local_customers`, `receipt_number`, `trip_id`, `total_amount`, `payment_method`, `payment_reference`, `transacted_at`, `synced_at`, `sync_status`, `error_code`, `error_message`); `customer_name` resolved via `JOIN` in `salesRepository`.
+  - `local_sales_items`: Line items for sales (`id`, `sales_order_id` FK, `product_id` FK -> `local_product_catalog`, `quantity_sold`, `empties_returned`, `empties_defective`, `unit_price`, `subtotal`); `product_name` resolved via `JOIN` in `salesRepository`.
+  - `local_canister_ledger`: Append-only tracking of cylinder swaps and loaned canisters (`id`, `customer_id`, `product_id`, `trip_id`, `transaction_id`, `quantity_loaned`, `quantity_returned`, `net_balance_change`, `transacted_at`).
   - `sync_queue`: Mutation queue for store-and-forward syncing (`id`, `user_id`, `endpoint`, `operation_type`, `payload`, `status`, `retry_count`, `last_attempted_at`, `error_code`, `error_message`, `last_error`, `created_at`).
   - `local_receipt_sequences`: Sequential counters for document numbers (`INV-...` for sales, `CD-...` for canister returns).
-  - `local_vehicle_telemetry`: Distance-based 5,000-km PM and odometer telemetry (`truck_id`, `plate_number`, `model`, `current_odometer`, `last_pm_odometer`, `status`, `last_serviced_at`).
-  - `local_fuel_logs`: Fuel refills (`id`, `truck_id`, `driver_id`, `liters`, `total_cost`, `odometer`, `receipt_photo_uri`, `logged_at`, `synced`).
-  - `local_apprehensions`: Roadside citations (`id`, `truck_id`, `driver_id`, `agency`, `citation_number`, `violation_notes`, `fine_amount`, `ticket_photo_uri`, `reported_at`, `synced`).
-  - `local_incidents`: Breakdown/defect findings (`id`, `truck_id`, `driver_id`, `incident_type`, `description`, `severity`, `photo_uri`, `reported_at`, `synced`).
+  - `local_fuel_logs`: Fuel refills (`id`, `truck_id` FK -> `local_vehicles`, `driver_id`, `liters`, `total_cost`, `odometer`, `receipt_photo_uri`, `logged_at`, `synced`).
+  - `local_apprehensions`: Roadside citations (`id`, `truck_id` FK -> `local_vehicles`, `driver_id`, `agency`, `citation_number`, `violation_notes`, `fine_amount`, `ticket_photo_uri`, `reported_at`, `synced`).
+  - `local_incidents`: Breakdown/defect findings (`id`, `truck_id` FK -> `local_vehicles`, `driver_id`, `incident_type`, `description`, `severity`, `photo_uri`, `reported_at`, `synced`).
   - `local_service_zones`: Delivery service zones (`id`, `code`, `name`, `description`, `is_active`).
   - `local_product_catalog`: Cached product metadata (`product_id`, `sku`, `name`, `category`, `container_type`, `net_weight_kg`, `price`, `is_active`, `updated_at`) for instant offline and initial-render pricing.
-  - `local_maintenance_logs`: Cached vehicle PM and service history (`id`, `truck_id`, `service_type`, `title`, `description`, `odometer_at_service`, `cost`, `serviced_at`, `next_pm_odometer`, `created_at`).
+  - `local_maintenance_logs`: Cached vehicle PM and service history (`id`, `truck_id` FK -> `local_vehicles`, `service_type`, `title`, `description`, `odometer_at_service`, `cost`, `serviced_at`, `next_pm_odometer`, `created_at`).
 - **Database Reset & Re-initialization (`resetFullDatabase()`)**:
-  - Disables foreign keys (`PRAGMA foreign_keys = OFF;`), drops all 15 local SQLite tables in reverse dependency order, re-enables foreign keys, and re-executes `SCHEMA_SQL` to return the client to a clean slate without foreign key constraint violations.
+  - Disables foreign keys (`PRAGMA foreign_keys = OFF;`), drops all local SQLite tables in reverse dependency order, re-enables foreign keys, and re-executes `SCHEMA_SQL` to return the active account's database to a clean slate without foreign key constraint violations.
   - Retained as a programmatic utility in `src/database/connection.ts`. Testing-only UI reset triggers have been removed from Profile screens (`ProfileScreen.js`) for the production APK build.
   - **Explicit Logout Confirmation**: The shared profile screen (`ProfileScreen.js`, utilized across both Driver and Sales roles with red danger-outline button styling) enforces a confirmation dialog (`Alert.alert`) before executing `onLogout`, guarding frontline operators against accidental sign-outs.
 
@@ -295,8 +298,8 @@ Run lint and typecheck before declaring any task done.
   - `driver/`: Driver domain widgets and operational forms (`ApprehensionModal.jsx`, `EmergencySosModal.jsx`, `EndTripModal.jsx`, `FuelEntryModal.jsx`, `VehicleIssueModal.jsx`).
   - `navigation/`: Dynamic navigation components (`BottomNav.js`).
   - `profile/`: User profile management widgets (`EditProfileModal.jsx`, `AvatarEditModal.jsx`).
-  - `sales/`: Sales domain widgets (`CustomerCard.js`, `OrderSummaryDrawer.js`, `ProductOrderCard.js`, `QuantityControl.js`).
-  - `ui/`: Universal UI primitives (`ContactField.js`, `FadeInView.js`, `InputField.js`, `PasswordField.js`, `PrimaryButton.js`).
+  - `sales/`: Sales domain widgets (`CustomerCard.js`, `OrderSummaryDrawer.js`, `ProductOrderCard.js`, `QuantityControl.js`, `TransactionDetailsModal.js`).
+  - `ui/`: Universal UI primitives (`BottomSheetModal.jsx` — draggable top handle for full-height expansion/collapse/dismiss and `useKeyboardHeight`-backed cross-platform keyboard avoidance; `KeyboardAwareScrollView.jsx` — used across form screens including `LoginScreen.js` and `ChangePasswordScreen.js`; `ContactField.js`, `FadeInView.js`, `InputField.js`, `PasswordField.js`, `PrimaryButton.js`).
 - **Pruned Boilerplate & Symmetrical Architecture**:
   - All dead Expo starter template files (`animated-icon.*`, `app-tabs.*`, `themed-text.*`, `themed-view.*`, `web-badge.*`, `hint-row.*`, `collapsible.tsx`, `use-color-scheme.*`, `use-theme.ts`, `constants/theme.ts`, `src/global.css`, `scripts/reset-project.js`) and unreferenced starter assets have been permanently pruned.
   - Symmetrical 1:1 mapping between `src/screens/<domain>` and `src/components/<domain>`.

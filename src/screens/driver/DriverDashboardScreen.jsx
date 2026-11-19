@@ -308,7 +308,7 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
               Driver Cabin Control
             </Text>
             <Text className="text-white text-3xl font-extrabold tracking-tight mt-0.5">
-              Good day, {user?.firstName || 'Danilo'}!
+              Good day, {user?.firstName || user?.username || 'Driver'}!
             </Text>
           </View>
         </View>

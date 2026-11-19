@@ -54,11 +54,10 @@ export const customerRepository = {
       conditions.push(
         `(LOWER(COALESCE(business_name, '')) LIKE ?
           OR LOWER(COALESCE(contact_person, '')) LIKE ?
-          OR LOWER(COALESCE(name, '')) LIKE ?
           OR contact_number LIKE ?
           OR LOWER(COALESCE(delivery_address, '')) LIKE ?)`
       );
-      params.push(term, term, term, term, term);
+      params.push(term, term, term, term);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -66,8 +65,8 @@ export const customerRepository = {
       sortOrder === 'RECENT'
         ? 'ORDER BY created_at DESC'
         : sortOrder === 'DESC'
-        ? 'ORDER BY COALESCE(name, business_name, contact_person) DESC'
-        : 'ORDER BY COALESCE(name, business_name, contact_person) ASC';
+        ? 'ORDER BY COALESCE(NULLIF(business_name, \'\'), contact_person) DESC'
+        : 'ORDER BY COALESCE(NULLIF(business_name, \'\'), contact_person) ASC';
 
     const rows = await db.getAllAsync<any>(
       `SELECT * FROM local_customers ${whereClause} ${orderByClause};`,
@@ -138,9 +137,8 @@ export const customerRepository = {
           zone_id: string | null;
           canister_debt: number;
           is_locally_created: number;
-          name: string | null;
         }>(
-          'SELECT id, business_name, contact_person, contact_number, delivery_address, customer_type, zone_id, canister_debt, is_locally_created, name FROM local_customers WHERE id = ?;',
+          'SELECT id, business_name, contact_person, contact_number, delivery_address, customer_type, zone_id, canister_debt, is_locally_created FROM local_customers WHERE id = ?;',
           [c.id]
         );
 
@@ -161,7 +159,6 @@ export const customerRepository = {
         const pendingDelta = pendingDebtMap.get(c.id) || 0;
         const effectiveCanisterDebt = Math.max(0, serverCanisterDebt + pendingDelta);
         const createdAt = c.created_at || c.createdAt || new Date().toISOString();
-        const displayName = c.name || businessName || contactPerson;
 
         if (
           !existing ||
@@ -171,18 +168,24 @@ export const customerRepository = {
           existing.delivery_address !== deliveryAddress ||
           existing.customer_type !== customerType ||
           existing.zone_id !== zoneId ||
-          Number(existing.canister_debt) !== effectiveCanisterDebt ||
-          existing.name !== displayName
+          Number(existing.canister_debt) !== effectiveCanisterDebt
         ) {
           hasChanges = true;
+        }
+
+        if (zoneId) {
+          await txn.runAsync(
+            `INSERT OR IGNORE INTO local_service_zones (id, code, name, is_active)
+             VALUES (?, ?, ?, 1);`,
+            [zoneId, zoneId, 'Delivery Zone']
+          );
         }
 
         await txn.runAsync(
           `INSERT INTO local_customers (
             id, business_name, contact_person, contact_number, delivery_address,
-            customer_type, zone_id, canister_debt, is_locally_created, created_at,
-            name, address
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            customer_type, zone_id, canister_debt, is_locally_created, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             business_name = excluded.business_name,
             contact_person = excluded.contact_person,
@@ -190,9 +193,7 @@ export const customerRepository = {
             delivery_address = excluded.delivery_address,
             customer_type = excluded.customer_type,
             zone_id = excluded.zone_id,
-            canister_debt = excluded.canister_debt,
-            name = excluded.name,
-            address = excluded.address
+            canister_debt = excluded.canister_debt
           WHERE local_customers.is_locally_created = 0;`,
           [
             c.id,
@@ -205,8 +206,6 @@ export const customerRepository = {
             effectiveCanisterDebt,
             c.is_locally_created ? 1 : 0,
             createdAt,
-            displayName,
-            deliveryAddress,
           ]
         );
       }
@@ -225,28 +224,33 @@ export const customerRepository = {
     const zoneId = customer.zone_id || customer.zoneId || null;
     const canisterDebt = customer.canister_debt ?? customer.canisterDebt ?? 0;
     const createdAt = customer.created_at || customer.createdAt || new Date().toISOString();
-    const displayName = customer.name || businessName || contactPerson;
 
-    await db.runAsync(
-      `INSERT INTO local_customers (
-        id, business_name, contact_person, contact_number, delivery_address,
-        customer_type, zone_id, canister_debt, is_locally_created, created_at,
-        name, address
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?);`,
-      [
-        customer.id,
-        businessName,
-        contactPerson,
-        contactNumber,
-        deliveryAddress,
-        customerType,
-        zoneId,
-        canisterDebt,
-        createdAt,
-        displayName,
-        deliveryAddress,
-      ]
-    );
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      if (zoneId) {
+        await txn.runAsync(
+          `INSERT OR IGNORE INTO local_service_zones (id, code, name, is_active)
+           VALUES (?, ?, ?, 1);`,
+          [zoneId, zoneId, 'Delivery Zone']
+        );
+      }
+      await txn.runAsync(
+        `INSERT INTO local_customers (
+          id, business_name, contact_person, contact_number, delivery_address,
+          customer_type, zone_id, canister_debt, is_locally_created, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?);`,
+        [
+          customer.id,
+          businessName,
+          contactPerson,
+          contactNumber,
+          deliveryAddress,
+          customerType,
+          zoneId,
+          canisterDebt,
+          createdAt,
+        ]
+      );
+    });
   },
 
   async updateCustomerDebt(customerId: string, netDebtChange: number): Promise<void> {
@@ -317,8 +321,7 @@ export const customerRepository = {
       `SELECT
          cl.product_id,
          COALESCE(
-           (SELECT product_name FROM local_vehicle_inventory WHERE product_id = cl.product_id LIMIT 1),
-           (SELECT product_name FROM local_sales_items WHERE product_id = cl.product_id LIMIT 1),
+           p.name,
            CASE 
              WHEN cl.product_id LIKE '%canister%' THEN '170g Butane Canister'
              WHEN cl.product_id LIKE '%11kg%' THEN '11kg LPG Cylinder'
@@ -329,6 +332,7 @@ export const customerRepository = {
          SUM(cl.net_balance_change) AS net_balance,
          SUM(CASE WHEN so.sync_status != 'SYNCED' THEN cl.net_balance_change ELSE 0 END) AS pending_balance
        FROM local_canister_ledger cl
+       LEFT JOIN local_product_catalog p ON p.product_id = cl.product_id
        LEFT JOIN local_sales_orders so ON so.id = cl.transaction_id
        WHERE cl.customer_id = ?
        GROUP BY cl.product_id

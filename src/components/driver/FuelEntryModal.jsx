@@ -128,7 +128,7 @@ const FuelEntryModal = ({ visible, onClose, user, telemetry, onSuccess }) => {
       dismissible={!submitting}
       backdropOpacity={0.6}
     >
-      <View className="bg-white rounded-t-[32px] p-6">
+      <View className="bg-white rounded-t-[32px] px-6 pt-7 pb-6">
           {/* Header */}
           <View className="flex-row items-center justify-between pb-4 border-b border-gray-100">
             <View>
@@ -147,6 +147,7 @@ const FuelEntryModal = ({ visible, onClose, user, telemetry, onSuccess }) => {
 
           <ScrollView
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ paddingTop: 16, paddingBottom: 24 }}
           >
             {/* Odometer Info Banner */}
