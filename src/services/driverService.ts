@@ -431,7 +431,8 @@ export const driverService = {
     };
 
     let postedDirectly = false;
-    if (networkSentinel.isOnline()) {
+    const hasPendingPhoto = Boolean(data.receiptPhotoUri && !receiptMediaKey);
+    if (networkSentinel.isOnline() && !hasPendingPhoto) {
       try {
         await driverApi.postFuelLog(payload);
         fuelLog.synced = true;
@@ -543,7 +544,7 @@ export const driverService = {
     };
 
     let postedDirectly = false;
-    if (networkSentinel.isOnline()) {
+    if (networkSentinel.isOnline() && ticketMediaKey) {
       try {
         await driverApi.postApprehension(payload);
         report.synced = true;
@@ -642,7 +643,8 @@ export const driverService = {
     };
 
     let postedDirectly = false;
-    if (networkSentinel.isOnline()) {
+    const hasPendingPhoto = Boolean(data.photoUri && !photoMediaKey);
+    if (networkSentinel.isOnline() && !hasPendingPhoto) {
       try {
         await driverApi.postVehicleIncident(payload);
         issue.synced = true;

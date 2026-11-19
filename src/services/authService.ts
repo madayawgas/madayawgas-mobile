@@ -64,8 +64,8 @@ export const authService = {
    * Revocation calls are debounced to prevent duplicate alerts from concurrent requests.
    */
   async clearSession(reason: AuthSessionReason = 'logout'): Promise<void> {
-    await sessionStore.clearSession(reason);
     await setActiveDatabaseUser(null);
+    await sessionStore.clearSession(reason);
   },
 
   /**

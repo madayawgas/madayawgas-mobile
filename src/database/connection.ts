@@ -5,8 +5,8 @@ const GUEST_DB_NAME = 'madayawgas_guest.db';
 
 let activeUserId: string | null = null;
 let activeDbName: string = GUEST_DB_NAME;
-let dbInstance: SQLite.SQLiteDatabase | null = null;
-let initPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+const dbPool = new Map<string, SQLite.SQLiteDatabase>();
+const initPromises = new Map<string, Promise<SQLite.SQLiteDatabase>>();
 
 function resolveDbNameForUser(userId?: string | null): string {
   if (!userId || !String(userId).trim()) {
@@ -18,34 +18,12 @@ function resolveDbNameForUser(userId?: string | null): string {
 
 /**
  * Switches the active SQLite database file to the specified user's isolated file.
- * Closes any previously open database handle cleanly so accounts never share state.
+ * Keeps previously opened handles in dbPool so in-flight queries finish cleanly
+ * without throwing "Access to closed resource".
  */
 export async function setActiveDatabaseUser(userId: string | null): Promise<void> {
   const nextDbName = resolveDbNameForUser(userId);
   activeUserId = userId || null;
-
-  if (nextDbName === activeDbName && (dbInstance || !initPromise)) {
-    return;
-  }
-
-  if (initPromise) {
-    try {
-      await initPromise;
-    } catch {
-      // ignore failed prior init
-    }
-  }
-
-  if (dbInstance) {
-    try {
-      await dbInstance.closeAsync();
-    } catch (closeErr) {
-      console.warn('[Database] Failed to close previous DB handle cleanly:', closeErr);
-    }
-    dbInstance = null;
-  }
-
-  initPromise = null;
   activeDbName = nextDbName;
 }
 
@@ -327,17 +305,19 @@ async function migrateTo3NFIfNeeded(db: SQLite.SQLiteDatabase): Promise<void> {
  * Configures PRAGMA journal_mode = WAL and foreign_keys = ON.
  */
 export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (dbInstance) {
-    return dbInstance;
-  }
-
-  if (initPromise) {
-    return initPromise;
-  }
-
   const targetDbName = activeDbName;
 
-  initPromise = (async () => {
+  const existing = dbPool.get(targetDbName);
+  if (existing) {
+    return existing;
+  }
+
+  const inFlight = initPromises.get(targetDbName);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const promise = (async () => {
     try {
       const db = await SQLite.openDatabaseAsync(targetDbName);
 
@@ -348,15 +328,15 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 
       await migrateTo3NFIfNeeded(db);
 
-      dbInstance = db;
+      dbPool.set(targetDbName, db);
       return db;
-    } catch (err) {
-      initPromise = null;
-      throw err;
+    } finally {
+      initPromises.delete(targetDbName);
     }
   })();
 
-  return initPromise;
+  initPromises.set(targetDbName, promise);
+  return promise;
 }
 
 /**
