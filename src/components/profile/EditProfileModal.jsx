@@ -223,10 +223,7 @@ const EditProfileModal = ({
       avoidKeyboard={true}
       backdropOpacity={0.6}
     >
-      <View className="bg-white rounded-t-[32px] p-6 pb-8">
-          {/* DRAG HANDLE BAR */}
-          <View className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-3" />
-
+      <View className="bg-white rounded-t-[32px] px-6 pt-7 pb-8">
           {/* HEADER */}
           <View className="flex-row items-center justify-between pb-3 border-b border-slate-100 mb-4">
             <View>

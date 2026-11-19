@@ -21,9 +21,15 @@ import {
   StockShortageItem,
 } from '@/types';
 import { networkSentinel } from '@/sync/networkSentinel';
-import { syncWorker } from '@/sync/syncWorker';
+import { syncScheduler } from '@/sync/syncScheduler';
 import { mediaService } from './mediaService';
 import { authService } from './authService';
+import { dataRevalidator } from './dataRevalidator';
+
+export interface LocalFirstReadOptions {
+  forceRefresh?: boolean;
+  skipRevalidate?: boolean;
+}
 
 export interface SaleItemInput {
   productId: string;
@@ -90,17 +96,177 @@ export interface RegisterCustomerInput {
 let activeDashboardPromise: Promise<SalesDashboardData> | null = null;
 let activeDashboardUserId: string | null = null;
 
+async function revalidateSalesTrip(effectiveUserId: string, force: boolean): Promise<void> {
+  await dataRevalidator.run(
+    'sales:trip',
+    async ({ isSessionStillValid }) => {
+      const assignment = await tripApi.fetchActiveAssignment();
+      if (!(await isSessionStillValid())) return;
+
+      const currentLocal = await tripRepository.getActiveTrip();
+
+      if (assignment?.trip && assignment.trip.id) {
+        const rawTrip = assignment.trip as any;
+        const tripId = rawTrip.id;
+        const tripSalesUserId = rawTrip.salesUserId || rawTrip.sales_user_id;
+        const tripStatus = rawTrip.status || 'IN_PROGRESS';
+
+        if (tripSalesUserId && tripSalesUserId !== effectiveUserId) {
+          if (currentLocal) {
+            await tripRepository.clearActiveTrip();
+            await inventoryRepository.clearInventory();
+            dataRevalidator.emit('TRIP_UPDATED');
+            dataRevalidator.emit('INVENTORY_UPDATED');
+          }
+          return;
+        }
+
+        if (tripStatus !== 'IN_PROGRESS' && tripStatus !== 'PENDING') {
+          if (currentLocal) {
+            await tripRepository.clearActiveTrip();
+            await inventoryRepository.clearInventory();
+            dataRevalidator.emit('TRIP_UPDATED');
+            dataRevalidator.emit('INVENTORY_UPDATED');
+          }
+          return;
+        }
+
+        const tripNumber =
+          rawTrip.tripNumber ||
+          rawTrip.trip_number ||
+          `TRIP-${tripId.substring(0, 8)}`;
+
+        const nextTrip: ActiveTrip = {
+          trip_id: tripId,
+          trip_number: tripNumber,
+          vehicle_plate: rawTrip.truckPlateNumber || rawTrip.truck_plate_number || 'N/A',
+          driver_name: rawTrip.driverName || rawTrip.driver_name || 'Driver',
+          sales_user_id: tripSalesUserId || effectiveUserId,
+          zone_id: rawTrip.zoneId || rawTrip.zone_id || 'DEFAULT',
+          status: tripStatus,
+          dispatched_at: rawTrip.departureTime || rawTrip.departure_time || new Date().toISOString(),
+          truck_id: rawTrip.truckId || rawTrip.truck_id || null,
+          truck_model: rawTrip.truckModel || rawTrip.truck_model || null,
+          driver_id: rawTrip.driverId || rawTrip.driver_id || null,
+          sales_user_name: rawTrip.salesUserName || rawTrip.sales_user_name || null,
+          zone_name: rawTrip.zoneName || rawTrip.zone_name || null,
+        };
+
+        const tripChanged =
+          !currentLocal ||
+          currentLocal.trip_id !== nextTrip.trip_id ||
+          currentLocal.status !== nextTrip.status ||
+          currentLocal.zone_id !== nextTrip.zone_id ||
+          currentLocal.vehicle_plate !== nextTrip.vehicle_plate;
+
+        await tripRepository.saveActiveTrip(nextTrip);
+        if (tripChanged) {
+          dataRevalidator.emit('TRIP_UPDATED');
+        }
+
+        try {
+          const stockItems = await tripApi.fetchTripStock(nextTrip.trip_id);
+          if (!(await isSessionStillValid())) return;
+          const invChanged = await inventoryRepository.syncTripInventory(nextTrip.trip_id, stockItems);
+          if (invChanged) {
+            dataRevalidator.emit('INVENTORY_UPDATED');
+          }
+        } catch (stockErr) {
+          console.warn('[SalesService] Background trip stock sync warning:', stockErr);
+        }
+      } else if (currentLocal) {
+        await tripRepository.clearActiveTrip();
+        await inventoryRepository.clearInventory();
+        dataRevalidator.emit('TRIP_UPDATED');
+        dataRevalidator.emit('INVENTORY_UPDATED');
+      }
+    },
+    { force }
+  );
+}
+
+async function revalidateCustomers(zoneId: string | undefined, force: boolean): Promise<void> {
+  const targetZone = zoneId && zoneId !== 'ALL' ? zoneId : undefined;
+  const key = `customers:${targetZone || 'ALL'}`;
+  await dataRevalidator.run(
+    key,
+    async ({ isSessionStillValid }) => {
+      const remoteData = await customerApi.fetchZoneCustomers(targetZone);
+      if (!(await isSessionStillValid())) return;
+      const rawList = Array.isArray(remoteData)
+        ? remoteData
+        : Array.isArray((remoteData as any)?.customers)
+        ? (remoteData as any).customers
+        : [];
+      if (rawList.length > 0) {
+        const hasChanges = await customerRepository.upsertCustomers(rawList);
+        if (hasChanges) {
+          dataRevalidator.emit('CUSTOMERS_UPDATED');
+        }
+      }
+    },
+    { force }
+  );
+}
+
+async function revalidateProductCatalog(force: boolean): Promise<void> {
+  await dataRevalidator.run(
+    'product:catalog',
+    async ({ isSessionStillValid }) => {
+      const remote = await productApi.fetchProductCatalog();
+      if (!(await isSessionStillValid())) return;
+      const list = Array.isArray(remote)
+        ? remote
+        : (remote as any)?.products || (remote as any)?.items || [];
+      if (Array.isArray(list) && list.length > 0) {
+        const hasChanges = await inventoryRepository.upsertProductCatalog(list);
+        if (hasChanges) {
+          dataRevalidator.emit('CATALOG_UPDATED');
+        }
+      }
+    },
+    { force, cooldownMs: 60000 }
+  );
+}
+
+async function revalidateZones(force: boolean): Promise<void> {
+  await dataRevalidator.run(
+    'service:zones',
+    async ({ isSessionStillValid }) => {
+      const remoteZones = await scheduleApi.fetchZones();
+      if (!(await isSessionStillValid())) return;
+      if (remoteZones.length > 0) {
+        await zoneRepository.upsertZones(remoteZones);
+        dataRevalidator.emit('ZONES_UPDATED');
+      }
+    },
+    { force, cooldownMs: 60000 }
+  );
+}
+
+/**
+ * Computes the default empties returned for a line item based on the customer's
+ * existing canister debt for that product:
+ * - New customer (debt = 0): returns 0 empties (all sold units are loaned).
+ * - Repeat customer (debt > 0): assumes 1-for-1 swap up to existing debt
+ *   (`min(quantitySold, existingProductDebt)`).
+ */
+export function computeDefaultEmptiesReturned(quantitySold: number, existingProductDebt: number): number {
+  const qty = Math.max(0, Number(quantitySold) || 0);
+  const debt = Math.max(0, Number(existingProductDebt) || 0);
+  return Math.min(qty, debt);
+}
+
 export const salesService = {
-    /**
-   * Authoritatively checks and resolves the active trip assigned to the specified sales user:
-   * - Validates trip details from backend (when online) or local SQLite cache (when offline).
-   * - Strict Binding Invariant: Ensures that the user is bound to that trip (trip.sales_user_id === userId).
-   * - If the trip belongs to another sales person / driver, or if no trip is assigned:
-   *   automatically purges stale active trip and stale vehicle inventory in SQLite, returning null.
-   * - If bound to an active trip (status === 'IN_PROGRESS'):
-   *   saves the active trip and synchronizes the vehicle stock manifest to local_vehicle_inventory.
+  /**
+   * Local-First active trip resolution:
+   * - Reads immediately from local SQLite (`local_active_trip`) and enforces user-binding.
+   * - Triggers deduplicated background revalidation when online (or awaits it when `forceRefresh: true`).
    */
-  async resolveActiveTripForUser(userId?: string): Promise<ActiveTrip | null> {
+  async resolveActiveTripForUser(
+    userId?: string,
+    options: LocalFirstReadOptions = {}
+  ): Promise<ActiveTrip | null> {
     let effectiveUserId = userId;
     if (!effectiveUserId) {
       try {
@@ -112,119 +278,48 @@ export const salesService = {
     }
 
     if (!effectiveUserId) {
-      // Unauthenticated or unknown operator - purge any stale cabin trip/inventory
       await tripRepository.clearActiveTrip();
       await inventoryRepository.clearInventory();
       return null;
     }
 
-    let activeTrip: ActiveTrip | null = null;
-
-    if (networkSentinel.isOnline()) {
-      try {
-        const assignment = await tripApi.fetchActiveAssignment();
-        if (assignment?.trip && assignment.trip.id) {
-          const rawTrip = assignment.trip as any;
-          const tripId = rawTrip.id;
-          const tripSalesUserId = rawTrip.salesUserId || rawTrip.sales_user_id;
-          const tripStatus = rawTrip.status || 'IN_PROGRESS';
-
-          // Validate that the trip is actively assigned to this specific sales user
-          if (tripSalesUserId && tripSalesUserId !== effectiveUserId) {
-            console.warn(
-              `[SalesService] Remote trip ${tripId} belongs to sales user "${tripSalesUserId}", not current operator "${effectiveUserId}". Purging cached assignment.`
-            );
-            await tripRepository.clearActiveTrip();
-            await inventoryRepository.clearInventory();
-            return null;
-          }
-
-          if (tripStatus !== 'IN_PROGRESS' && tripStatus !== 'PENDING') {
-            console.log(`[SalesService] Remote trip ${tripId} status is ${tripStatus}. Purging cached assignment.`);
-            await tripRepository.clearActiveTrip();
-            await inventoryRepository.clearInventory();
-            return null;
-          }
-
-          const tripNumber =
-            rawTrip.tripNumber ||
-            rawTrip.trip_number ||
-            `TRIP-${tripId.substring(0, 8)}`;
-
-          activeTrip = {
-            trip_id: tripId,
-            trip_number: tripNumber,
-            vehicle_plate: rawTrip.truckPlateNumber || rawTrip.truck_plate_number || 'N/A',
-            driver_name: rawTrip.driverName || rawTrip.driver_name || 'Driver',
-            sales_user_id: tripSalesUserId || effectiveUserId,
-            zone_id: rawTrip.zoneId || rawTrip.zone_id || 'DEFAULT',
-            status: tripStatus,
-            dispatched_at: rawTrip.departureTime || rawTrip.departure_time || new Date().toISOString(),
-            truck_id: rawTrip.truckId || rawTrip.truck_id || null,
-            truck_model: rawTrip.truckModel || rawTrip.truck_model || null,
-            driver_id: rawTrip.driverId || rawTrip.driver_id || null,
-            sales_user_name: rawTrip.salesUserName || rawTrip.sales_user_name || null,
-            zone_name: rawTrip.zoneName || rawTrip.zone_name || null,
-          };
-          await tripRepository.saveActiveTrip(activeTrip);
-
-          // Authoritatively fetch vehicle stock manifest and sync to local_vehicle_inventory
-          try {
-            const stockItems = await tripApi.fetchTripStock(activeTrip.trip_id);
-            await inventoryRepository.syncTripInventory(activeTrip.trip_id, stockItems);
-          } catch (stockErr) {
-            console.warn('[SalesService] Could not fetch remote trip stock, keeping cached local inventory:', stockErr);
-          }
-        } else {
-          // Server reports no active trip for this user today
-          await tripRepository.clearActiveTrip();
-          await inventoryRepository.clearInventory();
-          activeTrip = null;
-        }
-      } catch (err) {
-        console.warn('[SalesService] Could not fetch remote trip assignment, falling back to local SQLite:', err);
-      }
+    if (options.forceRefresh) {
+      await revalidateSalesTrip(effectiveUserId, true);
+    } else if (!options.skipRevalidate) {
+      void revalidateSalesTrip(effectiveUserId, false);
     }
 
-    if (!activeTrip) {
-      const cachedTrip = await tripRepository.getActiveTrip();
-      if (cachedTrip) {
-        // Verify cached trip belongs to this sales user and is still active
-        const belongsToUser = cachedTrip.sales_user_id === effectiveUserId;
-        const isActive = cachedTrip.status === 'IN_PROGRESS';
+    const cachedTrip = await tripRepository.getActiveTrip();
+    if (cachedTrip) {
+      const belongsToUser = cachedTrip.sales_user_id === effectiveUserId;
+      const isActive = cachedTrip.status === 'IN_PROGRESS';
 
-        if (!belongsToUser || !isActive) {
-          console.log(
-            `[SalesService] Cached trip ${cachedTrip.trip_id} does not belong to operator "${effectiveUserId}" (sales_user_id="${cachedTrip.sales_user_id}", status="${cachedTrip.status}"). Purging.`
-          );
-          await tripRepository.clearActiveTrip();
-          await inventoryRepository.clearInventory();
-          activeTrip = null;
-        } else {
-          activeTrip = cachedTrip;
-        }
+      if (!belongsToUser || !isActive) {
+        await tripRepository.clearActiveTrip();
+        await inventoryRepository.clearInventory();
+        return null;
       }
+      return cachedTrip;
     }
 
-    return activeTrip;
+    return null;
   },
 
   /**
    * Helper alias to resolve active delivery trip for user.
    */
-  async getActiveTrip(userId?: string): Promise<ActiveTrip | null> {
-    return this.resolveActiveTripForUser(userId);
+  async getActiveTrip(userId?: string, options?: LocalFirstReadOptions): Promise<ActiveTrip | null> {
+    return this.resolveActiveTripForUser(userId, options);
   },
 
   /**
-   * Retrieves operational dashboard data for the sales agent:
-   * - Authoritative active trip synchronization scoped to user
-   * - Shift total sales amount scoped strictly to active trip
-   * - Latest sales orders scoped strictly to active trip
-   * - Vehicle inventory counters (discrete integer units) scoped strictly to active trip
-   * - Pending sync items scoped to user
+   * Retrieves operational dashboard data for the sales agent (Local-First):
+   * - Reads immediately from SQLite; triggers background revalidation unless `skipRevalidate` is set.
    */
-  async getDashboardData(userId?: string): Promise<SalesDashboardData> {
+  async getDashboardData(
+    userId?: string,
+    options: LocalFirstReadOptions = {}
+  ): Promise<SalesDashboardData> {
     let effectiveUserId = userId;
     if (!effectiveUserId) {
       try {
@@ -235,14 +330,17 @@ export const salesService = {
       }
     }
 
-    if (activeDashboardPromise && activeDashboardUserId === effectiveUserId) {
+    if (!options.forceRefresh && activeDashboardPromise && activeDashboardUserId === effectiveUserId) {
       return activeDashboardPromise;
     }
 
     activeDashboardUserId = effectiveUserId || null;
     activeDashboardPromise = (async () => {
       try {
-        const activeTrip = await this.resolveActiveTripForUser(effectiveUserId);
+        if (!options.skipRevalidate) {
+          void revalidateProductCatalog(Boolean(options.forceRefresh));
+        }
+        const activeTrip = await this.resolveActiveTripForUser(effectiveUserId, options);
         const isTripActive = Boolean(activeTrip && activeTrip.status === 'IN_PROGRESS');
 
         const [totalSales, recentOrders, inventory, queueCount, offlineCustomers] = await Promise.all([
@@ -268,6 +366,125 @@ export const salesService = {
     })();
 
     return activeDashboardPromise;
+  },
+
+  /**
+   * Fetches full local order details (line items + sync queue metadata) for a transaction.
+   */
+  async getOrderDetails(orderId: string): Promise<{
+    order: SalesOrder | null;
+    items: SalesOrderItem[];
+    queueItem: {
+      retry_count: number;
+      last_attempted_at?: string | null;
+      error_code?: string | null;
+      error_message?: string | null;
+    } | null;
+  }> {
+    const [{ order, items }, queueItem] = await Promise.all([
+      salesRepository.getOrderWithItems(orderId),
+      syncQueueRepository.getItemById(orderId),
+    ]);
+    return {
+      order,
+      items,
+      queueItem: queueItem
+        ? {
+            retry_count: queueItem.retry_count,
+            last_attempted_at: queueItem.last_attempted_at,
+            error_code: queueItem.error_code,
+            error_message: queueItem.error_message,
+          }
+        : null,
+    };
+  },
+
+  /**
+   * Resets a quarantined or failed order back to PENDING and triggers an immediate sync attempt.
+   */
+  async retryOrderSync(orderId: string) {
+    await syncQueueRepository.retryQuarantinedItem(orderId);
+    return syncScheduler.syncNow();
+  },
+
+  /**
+   * Attaches or replaces the GCash payment proof photo for a quarantined/failed order and retries sync.
+   */
+  async updateOrderPaymentProof(orderId: string, newPhotoUri: string) {
+    const queueItem = await syncQueueRepository.getItemById(orderId);
+    if (!queueItem) {
+      throw new Error('Queued sync record for this order was not found.');
+    }
+
+    const cached = await mediaService.processAndCacheImage(newPhotoUri, 'gcash_receipt');
+    const payload = JSON.parse(queueItem.payload);
+    if (!payload.invoice) {
+      payload.invoice = {};
+    }
+    payload.invoice.paymentMethod = 'GCASH';
+    payload.invoice.paymentProofUri = cached.localUri;
+    payload.invoice.paymentProofKey = null;
+
+    await salesRepository.updateOrderRecoveryFields(orderId, { paymentMethod: 'GCASH' });
+    await syncQueueRepository.updatePayloadAndResetPending(orderId, JSON.stringify(payload));
+    return syncScheduler.syncNow();
+  },
+
+  /**
+   * Switches a quarantined GCash order to CASH (clearing missing proof requirements) and retries sync.
+   */
+  async switchQuarantinedOrderToCash(orderId: string) {
+    const queueItem = await syncQueueRepository.getItemById(orderId);
+    if (!queueItem) {
+      throw new Error('Queued sync record for this order was not found.');
+    }
+
+    const payload = JSON.parse(queueItem.payload);
+    if (!payload.invoice) {
+      payload.invoice = {};
+    }
+    payload.invoice.paymentMethod = 'CASH';
+    payload.invoice.paymentProofUri = null;
+    payload.invoice.paymentProofKey = null;
+
+    await salesRepository.updateOrderRecoveryFields(orderId, { paymentMethod: 'CASH' });
+    await syncQueueRepository.updatePayloadAndResetPending(orderId, JSON.stringify(payload));
+    return syncScheduler.syncNow();
+  },
+
+  /**
+   * Regenerates transaction/receipt numbers after a DUPLICATE_ORDER_CONFLICT and retries sync.
+   */
+  async regenerateOrderRefsAndRetry(orderId: string) {
+    const queueItem = await syncQueueRepository.getItemById(orderId);
+    if (!queueItem) {
+      throw new Error('Queued sync record for this order was not found.');
+    }
+
+    const payload = JSON.parse(queueItem.payload);
+    const suffix = Date.now().toString().slice(-6);
+    const newTxNo = `TX-R-${suffix}`;
+    const isZeroSale = Boolean(payload.invoice?.declarationNumber && !payload.invoice?.invoiceNumber);
+    const newReceiptNo = isZeroSale ? `CD-R-${suffix}` : `INV-R-${suffix}`;
+
+    payload.transactionNo = newTxNo;
+    if (payload.transaction) {
+      payload.transaction.transactionNo = newTxNo;
+    }
+    if (payload.invoice) {
+      if (isZeroSale) {
+        payload.invoice.declarationNumber = newReceiptNo;
+      } else {
+        payload.invoice.invoiceNumber = newReceiptNo;
+      }
+    }
+
+    await salesRepository.updateOrderRecoveryFields(orderId, {
+      transactionNo: newTxNo,
+      receiptNumber: newReceiptNo,
+    });
+    await syncQueueRepository.updatePayloadAndResetPending(orderId, JSON.stringify(payload));
+    return syncScheduler.syncNow();
   },
   /**
    * Strict Stock Enforcement Policy: Validates that requested quantities do not
@@ -346,6 +563,7 @@ export const salesService = {
         persistentProofUri = cached.localUri;
       } catch (err: any) {
         console.warn('[SalesService] Could not cache GCash payment proof:', err?.message || err);
+        throw new Error('Could not save GCash receipt photo on this device. Please select or capture the photo again.');
       }
 
       // If online and persistent image exists, attempt eager media upload to /api/media/upload
@@ -392,8 +610,33 @@ export const salesService = {
     const canisterEntries: CanisterLedgerEntry[] = [];
     const inventoryDeductions: { productId: string; quantitySold: number }[] = [];
 
+    // Resolve authoritative unit prices from local_product_catalog if omitted/zero on sold items
+    const needsCatalogLookup = items.some(
+      (i) => i.quantitySold > 0 && (!Number.isFinite(Number(i.unitPrice)) || Number(i.unitPrice) <= 0)
+    );
+    const catalogById = new Map<string, number>();
+    if (needsCatalogLookup) {
+      const cachedCatalog = await inventoryRepository.getProductCatalog();
+      for (const c of cachedCatalog || []) {
+        if (c.product_id) {
+          catalogById.set(c.product_id, Number(c.price ?? 0));
+        }
+      }
+    }
+
     for (const item of items) {
-      const lineSubtotal = item.quantitySold * item.unitPrice;
+      const resolvedUnitPrice =
+        item.quantitySold > 0 && (!Number.isFinite(Number(item.unitPrice)) || Number(item.unitPrice) <= 0)
+          ? Number(catalogById.get(item.productId) ?? 0)
+          : Number(item.unitPrice ?? 0);
+
+      if (item.quantitySold > 0 && resolvedUnitPrice <= 0) {
+        throw new Error(
+          `Unit price unavailable for "${item.productName}". Please sync the product catalog while online.`
+        );
+      }
+
+      const lineSubtotal = item.quantitySold * resolvedUnitPrice;
       orderTotalAmount += lineSubtotal;
 
       const empties = Math.max(0, item.emptiesReturned || 0);
@@ -412,7 +655,7 @@ export const salesService = {
         quantity_sold: item.quantitySold,
         empties_returned: empties,
         empties_defective: item.emptiesDefective || 0,
-        unit_price: item.unitPrice,
+        unit_price: resolvedUnitPrice,
         subtotal: lineSubtotal,
       });
 
@@ -532,7 +775,7 @@ export const salesService = {
 
     // 7. If online, initiate background sync immediately
     if (networkSentinel.isOnline()) {
-      syncWorker.runSyncCycle().catch((err) => {
+      syncScheduler.syncNow(activeTrip.sales_user_id).catch((err) => {
         console.warn('[SalesService] Immediate background sync cycle skipped:', err?.message || err);
       });
     }
@@ -754,32 +997,20 @@ export const salesService = {
 
   /**
    * Retrieves customers with optional zone, search, and sorting filters.
-   * Pulls fresh zone customers if online, and queries authoritative local SQLite.
+   * Local-First: Immediately queries SQLite; triggers background zone sync only when not skipped.
    */
   async getCustomers(
     zoneId?: string,
     searchQuery?: string,
-    sortOrder: 'ASC' | 'DESC' | 'RECENT' = 'ASC'
+    sortOrder: 'ASC' | 'DESC' | 'RECENT' = 'ASC',
+    options: LocalFirstReadOptions = {}
   ): Promise<{ customers: Customer[]; count: number }> {
-    // 1. Sync remote if online and reachable
-    if (networkSentinel.isOnline()) {
-      try {
-        const targetZone = zoneId && zoneId !== 'ALL' ? zoneId : undefined;
-        const remoteData = await customerApi.fetchZoneCustomers(targetZone);
-        const rawList = Array.isArray(remoteData)
-          ? remoteData
-          : (Array.isArray((remoteData as any)?.customers)
-            ? (remoteData as any).customers
-            : []);
-        if (rawList.length > 0) {
-          await customerRepository.upsertCustomers(rawList);
-        }
-      } catch {
-        // Silent fallback to local database
-      }
+    if (options.forceRefresh) {
+      await revalidateCustomers(zoneId, true);
+    } else if (!options.skipRevalidate) {
+      void revalidateCustomers(zoneId, false);
     }
 
-    // 2. Read from authoritative local SQLite database
     const localCustomers = await customerRepository.getAllCustomers(searchQuery, zoneId, sortOrder);
     return {
       customers: localCustomers,
@@ -788,97 +1019,178 @@ export const salesService = {
   },
 
   /**
-   * Product catalog fetcher for sales and inventory selection.
-   * Strictly scopes returned products to what is loaded on the vehicle (local_vehicle_inventory).
-   * Enriches with authoritative remote catalog metadata (prices, weights) when online.
+   * Product catalog fetcher for sales and inventory selection (Local-First).
+   * Strictly scopes returned products to what is loaded on the vehicle (local_vehicle_inventory),
+   * enriched with cached metadata from local_product_catalog and refreshed in the background.
    */
-  async getProductCatalog(): Promise<any[]> {
+  async getProductCatalog(options: LocalFirstReadOptions = {}): Promise<any[]> {
     const session = await authService.getSession();
-    const activeTrip = await this.resolveActiveTripForUser(session?.id);
+    const activeTrip = await this.resolveActiveTripForUser(session?.id, options);
     if (!activeTrip || activeTrip.status !== 'IN_PROGRESS') {
       return [];
     }
 
-    const localInventory = await inventoryRepository.getAllInventory();
-    const loadedMap = new Map<string, VehicleInventory>();
-    (localInventory || []).forEach((inv) => {
-      if (inv && inv.product_id) {
-        loadedMap.set(inv.product_id, inv);
-      }
-    });
-
-    if (networkSentinel.isOnline()) {
-      try {
-        const remote = await productApi.fetchProductCatalog();
-        const list = Array.isArray(remote) ? remote : ((remote as any)?.products || (remote as any)?.items || []);
-        if (Array.isArray(list) && list.length > 0) {
-          // Strictly filter remote catalog to products loaded on the vehicle
-          const filteredRemote = loadedMap.size > 0
-            ? list.filter((p) =>
-                loadedMap.has(p.id) ||
-                Array.from(loadedMap.values()).some(
-                  (inv) => inv.sku === p.sku || inv.product_name.toLowerCase() === (p.name || '').toLowerCase()
-                )
-              )
-            : list;
-
-          return filteredRemote.map((p) => {
-            const matchedInv =
-              loadedMap.get(p.id) ||
-              Array.from(loadedMap.values()).find(
-                (inv) => inv.sku === p.sku || inv.product_name.toLowerCase() === (p.name || '').toLowerCase()
-              );
-            const isCanister =
-              p.containerType === 'CANISTER' ||
-              p.name?.toLowerCase().includes('canister') ||
-              p.sku?.toLowerCase().includes('canister');
-            const is50kg =
-              p.name?.toLowerCase().includes('50kg') ||
-              p.sku?.toLowerCase().includes('50kg') ||
-              Number(p.netWeightKg) === 50;
-            const defaultPrice = isCanister ? 100 : (is50kg ? 4200 : 1000);
-            const defaultNetWeight = isCanister ? 0.17 : (is50kg ? 50 : 11);
-
-            return {
-              id: p.id,
-              name: p.name || p.sku,
-              category: p.category || (isCanister ? 'Canister' : 'LPG Cylinder'),
-              containerType: p.containerType || (isCanister ? 'CANISTER' : 'CYLINDER'),
-              netWeightKg: Number(p.netWeightKg || defaultNetWeight),
-              price: Number(p.price || defaultPrice),
-              quantityRemaining: matchedInv ? matchedInv.quantity_remaining : 0,
-              quantityLoaded: matchedInv ? matchedInv.quantity_loaded : 0,
-              quantitySold: matchedInv ? matchedInv.quantity_sold : 0,
-              isActive: p.isActive !== false,
-              createdAt: p.createdAt || new Date().toISOString(),
-              updatedAt: p.updatedAt || new Date().toISOString(),
-            };
-          });
-        }
-      } catch (err) {
-        console.warn('[SalesService] Remote catalog fetch failed, falling back to local vehicle inventory:', err);
-      }
+    if (options.forceRefresh) {
+      await revalidateProductCatalog(true);
+    } else if (!options.skipRevalidate) {
+      void revalidateProductCatalog(false);
     }
 
-    // Offline or fallback to loaded vehicle inventory
-    if (Array.isArray(localInventory) && localInventory.length > 0) {
-      return localInventory.map((item) => ({
+    const [localInventory, cachedCatalog] = await Promise.all([
+      inventoryRepository.getAllInventory(),
+      inventoryRepository.getProductCatalog(),
+    ]);
+
+    if (!Array.isArray(localInventory) || localInventory.length === 0) {
+      return [];
+    }
+
+    const catalogById = new Map<string, any>();
+    const catalogBySkuOrName = new Map<string, any>();
+    for (const c of cachedCatalog || []) {
+      if (c.product_id) catalogById.set(c.product_id, c);
+      if (c.sku) catalogBySkuOrName.set(String(c.sku).toLowerCase(), c);
+      if (c.name) catalogBySkuOrName.set(String(c.name).toLowerCase(), c);
+    }
+
+    return localInventory.map((item) => {
+      const cached =
+        catalogById.get(item.product_id) ||
+        (item.sku ? catalogBySkuOrName.get(String(item.sku).toLowerCase()) : undefined) ||
+        catalogBySkuOrName.get(String(item.product_name || '').toLowerCase());
+
+      const isCanister =
+        cached?.container_type === 'CANISTER' ||
+        item.sku?.toLowerCase().includes('canister') ||
+        item.product_name?.toLowerCase().includes('canister');
+      const is50kg =
+        Number(cached?.net_weight_kg) === 50 ||
+        item.sku?.toLowerCase().includes('50kg') ||
+        item.product_name?.toLowerCase().includes('50kg');
+
+      const defaultNetWeight = isCanister ? 0.17 : is50kg ? 50 : 11;
+      const catalogPrice = Number(cached?.price ?? 0);
+
+      return {
         id: item.product_id,
-        name: item.product_name,
-        category: item.sku?.toLowerCase().includes('canister') ? 'Canister' : 'LPG Cylinder',
-        containerType: item.sku?.toLowerCase().includes('canister') ? 'CANISTER' : 'CYLINDER',
-        netWeightKg: item.sku?.toLowerCase().includes('11kg') ? 11 : (item.sku?.toLowerCase().includes('50kg') ? 50 : 0.17),
-        price: item.sku?.toLowerCase().includes('canister') ? 100 : (item.sku?.toLowerCase().includes('50kg') ? 4200 : 1000),
+        name: cached?.name || item.product_name,
+        category: cached?.category || (isCanister ? 'Canister' : 'LPG Cylinder'),
+        containerType: cached?.container_type || (isCanister ? 'CANISTER' : 'CYLINDER'),
+        netWeightKg: Number(cached?.net_weight_kg || defaultNetWeight),
+        unitPrice: catalogPrice,
+        price: catalogPrice,
         quantityRemaining: item.quantity_remaining,
         quantityLoaded: item.quantity_loaded,
         quantitySold: item.quantity_sold,
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }));
+        isActive: cached ? Boolean(cached.is_active) : true,
+        createdAt: cached?.updated_at || new Date().toISOString(),
+        updatedAt: cached?.updated_at || new Date().toISOString(),
+      };
+    });
+  },
+
+  /**
+   * Synchronizes delivery service zones from local cache with background revalidation.
+   */
+  async syncZones(options: LocalFirstReadOptions = {}): Promise<ServiceZone[]> {
+    if (options.forceRefresh) {
+      await revalidateZones(true);
+    } else if (!options.skipRevalidate) {
+      void revalidateZones(false);
+    }
+    return zoneRepository.getAllZones();
+  },
+
+  /**
+   * Background-fetches enriched customer details (e.g. canisterBalances, TIN) without blocking UI.
+   */
+  async fetchEnrichedCustomerDetails(customerId: string): Promise<any | null> {
+    if (!customerId || !networkSentinel.isOnline()) return null;
+    try {
+      const remoteDetails = await customerApi.getCustomerById(customerId);
+      if (remoteDetails) {
+        await customerRepository.upsertCustomers([remoteDetails]);
+      }
+      return remoteDetails;
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Resolves a customer's per-SKU canister debt balances by merging local SQLite
+   * `local_canister_ledger` entries with remote `canisterBalances` when online.
+   * Also returns `totalDebt` and `hasPerSkuBreakdown` for offline fallback.
+   */
+  async getCustomerProductBalances(customerId: string): Promise<{
+    balancesByProductId: Record<string, number>;
+    totalDebt: number;
+    hasPerSkuBreakdown: boolean;
+  }> {
+    if (!customerId) {
+      return { balancesByProductId: {}, totalDebt: 0, hasPerSkuBreakdown: false };
     }
 
-    return [];
+    const [dbCustomer, localBalances] = await Promise.all([
+      customerRepository.getCustomerById(customerId),
+      customerRepository.getCustomerCanisterBalances(customerId),
+    ]);
+
+    let remoteDetails: any = null;
+    if (dbCustomer && !dbCustomer.is_locally_created && networkSentinel.isOnline()) {
+      remoteDetails = await this.fetchEnrichedCustomerDetails(customerId);
+    }
+
+    const balanceMap = new Map<string, number>();
+
+    for (const item of remoteDetails?.canisterBalances || []) {
+      if (item && item.productId) {
+        balanceMap.set(
+          item.productId,
+          Math.max(0, Number(item.netBalance ?? item.quantityLoaned ?? 0))
+        );
+      }
+    }
+
+    for (const item of localBalances || []) {
+      if (item && item.productId) {
+        const existing = balanceMap.get(item.productId);
+        if (existing !== undefined) {
+          balanceMap.set(
+            item.productId,
+            Math.max(0, existing + Number(item.pendingBalance || 0))
+          );
+        } else {
+          balanceMap.set(
+            item.productId,
+            Math.max(0, Number(item.netBalance ?? item.pendingBalance ?? 0))
+          );
+        }
+      }
+    }
+
+    const balancesByProductId: Record<string, number> = {};
+    for (const [productId, balance] of balanceMap.entries()) {
+      if (balance > 0) {
+        balancesByProductId[productId] = balance;
+      }
+    }
+
+    const totalDebt = Math.max(
+      0,
+      Number(
+        dbCustomer?.canister_debt ??
+          remoteDetails?.totalNetCanisterDebt ??
+          dbCustomer?.canisterDebt ??
+          0
+      )
+    );
+
+    return {
+      balancesByProductId,
+      totalDebt,
+      hasPerSkuBreakdown: Object.keys(balancesByProductId).length > 0,
+    };
   },
 
   /**
@@ -951,22 +1263,5 @@ export const salesService = {
         createdAt: o.transacted_at,
       })),
     };
-  },
-
-  /**
-   * Synchronizes delivery service zones from backend and local cache.
-   */
-  async syncZones(): Promise<ServiceZone[]> {
-    if (networkSentinel.isOnline()) {
-      try {
-        const remoteZones = await scheduleApi.fetchZones();
-        if (remoteZones.length > 0) {
-          await zoneRepository.upsertZones(remoteZones);
-        }
-      } catch {
-        // Fallback to local service zones
-      }
-    }
-    return zoneRepository.getAllZones();
   },
 };

@@ -1,4 +1,5 @@
 export * from './sessionStore';
+export * from './dataRevalidator';
 export * from './authService';
 export * from './hydrationService';
 export * from './salesService';

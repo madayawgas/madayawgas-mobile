@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,12 +7,14 @@ import OrderSummaryDrawer from '../../components/sales/OrderSummaryDrawer';
 import FadeInView from '../../components/ui/FadeInView';
 import BottomSheetModal from '../../components/ui/BottomSheetModal';
 import { useBackHandler } from '../../hooks/useBackHandler';
+import { salesService, computeDefaultEmptiesReturned } from '../../services/salesService';
 
 const ConfirmOrderScreen = ({
   selectedProducts: initialProducts = [],
   allProducts = [],
   customer,
   initialQuantities = {},
+  initialEmptiesReturned = {},
   isSubmitting = false,
   onBack,
   onConfirm,
@@ -21,6 +23,13 @@ const ConfirmOrderScreen = ({
 }) => {
   const [products, setProducts] = useState(initialProducts);
   const [showAddProductModal, setShowAddProductModal] = useState(false);
+  const [customerBalances, setCustomerBalances] = useState({
+    balancesByProductId: {},
+    totalDebt: Math.max(0, Number(customer?.canister_debt ?? customer?.canisterDebt ?? 0)),
+    hasPerSkuBreakdown: false,
+  });
+  const manualEmptiesRef = useRef(new Set(Object.keys(initialEmptiesReturned || {})));
+
   const [quantities, setQuantities] = useState(() => {
     const initial = {};
     initialProducts.forEach((item) => {
@@ -36,6 +45,68 @@ const ConfirmOrderScreen = ({
     });
     return initial;
   });
+
+  const getExistingProductDebt = useCallback(
+    (productId, balances = customerBalances) => {
+      if (balances.hasPerSkuBreakdown) {
+        return Math.max(0, Number(balances.balancesByProductId[productId] || 0));
+      }
+      return Math.max(0, Number(balances.totalDebt || 0));
+    },
+    [customerBalances]
+  );
+
+  const buildDefaultEmptiesMap = useCallback(
+    (productList, qtyMap, prevEmpties = {}, balances = customerBalances) => {
+      const next = {};
+      let remainingFallbackDebt = Math.max(0, Number(balances.totalDebt || 0));
+
+      productList.forEach((item) => {
+        const qty = qtyMap[item.id] || 0;
+        if (manualEmptiesRef.current.has(item.id) && prevEmpties[item.id] !== undefined) {
+          next[item.id] = Math.max(0, Number(prevEmpties[item.id]) || 0);
+          return;
+        }
+        if (balances.hasPerSkuBreakdown) {
+          const skuDebt = Math.max(0, Number(balances.balancesByProductId[item.id] || 0));
+          next[item.id] = computeDefaultEmptiesReturned(qty, skuDebt);
+        } else {
+          const allocated = computeDefaultEmptiesReturned(qty, remainingFallbackDebt);
+          next[item.id] = allocated;
+          remainingFallbackDebt = Math.max(0, remainingFallbackDebt - allocated);
+        }
+      });
+      return next;
+    },
+    [customerBalances]
+  );
+
+  const [emptiesReturned, setEmptiesReturned] = useState(() =>
+    buildDefaultEmptiesMap(initialProducts, quantities, initialEmptiesReturned, customerBalances)
+  );
+
+  // Load customer's per-SKU canister balances (local SQLite + background remote merge)
+  useEffect(() => {
+    let isMounted = true;
+    const loadBalances = async () => {
+      if (!customer?.id) return;
+      try {
+        const resolved = await salesService.getCustomerProductBalances(customer.id);
+        if (!isMounted) return;
+        setCustomerBalances(resolved);
+        setEmptiesReturned((prev) =>
+          buildDefaultEmptiesMap(products, quantities, prev, resolved)
+        );
+      } catch (err) {
+        console.warn('[ConfirmOrderScreen] Failed to load customer canister balances:', err);
+      }
+    };
+    loadBalances();
+    return () => {
+      isMounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer?.id]);
 
   // Sync if initialProducts changes (e.g. returning from catalog selection)
   useEffect(() => {
@@ -63,15 +134,33 @@ const ConfirmOrderScreen = ({
             : 1;
         next[item.id] = Math.min(desiredQty, maxStock);
       });
+      setEmptiesReturned((prevEmpties) =>
+        buildDefaultEmptiesMap(initialProducts, next, prevEmpties, customerBalances)
+      );
       return next;
     });
-  }, [initialProducts, initialQuantities]);
+  }, [initialProducts, initialQuantities, buildDefaultEmptiesMap, customerBalances]);
 
   const handleUpdateQuantity = (id, newQty) => {
-    const updated = { ...quantities, [id]: Math.max(0, newQty) };
+    const safeQty = Math.max(0, newQty);
+    const updated = { ...quantities, [id]: safeQty };
     setQuantities(updated);
+
+    const updatedEmpties = buildDefaultEmptiesMap(products, updated, emptiesReturned, customerBalances);
+    setEmptiesReturned(updatedEmpties);
+
     if (onQuantitiesChange) {
-      onQuantitiesChange(updated, products.map((p) => p.id));
+      onQuantitiesChange(updated, products.map((p) => p.id), updatedEmpties);
+    }
+  };
+
+  const handleUpdateEmpties = (id, newEmpties) => {
+    const safeEmpties = Math.max(0, Number(newEmpties) || 0);
+    manualEmptiesRef.current.add(id);
+    const updatedEmpties = { ...emptiesReturned, [id]: safeEmpties };
+    setEmptiesReturned(updatedEmpties);
+    if (onQuantitiesChange) {
+      onQuantitiesChange(quantities, products.map((p) => p.id), updatedEmpties);
     }
   };
 
@@ -79,10 +168,14 @@ const ConfirmOrderScreen = ({
     const updatedProducts = products.filter((item) => item.id !== id);
     const updated = { ...quantities };
     delete updated[id];
+    const updatedEmpties = { ...emptiesReturned };
+    delete updatedEmpties[id];
+    manualEmptiesRef.current.delete(id);
     setProducts(updatedProducts);
     setQuantities(updated);
+    setEmptiesReturned(updatedEmpties);
     if (onQuantitiesChange) {
-      onQuantitiesChange(updated, updatedProducts.map((p) => p.id));
+      onQuantitiesChange(updated, updatedProducts.map((p) => p.id), updatedEmpties);
     }
   };
 
@@ -99,24 +192,26 @@ const ConfirmOrderScreen = ({
     );
     const updatedProducts = [...products, productToAdd];
     const updated = { ...quantities, [productToAdd.id]: initialQty };
+    const updatedEmpties = buildDefaultEmptiesMap(updatedProducts, updated, emptiesReturned, customerBalances);
     setProducts(updatedProducts);
     setQuantities(updated);
+    setEmptiesReturned(updatedEmpties);
     if (onQuantitiesChange) {
-      onQuantitiesChange(updated, updatedProducts.map((p) => p.id));
+      onQuantitiesChange(updated, updatedProducts.map((p) => p.id), updatedEmpties);
     }
   };
 
   const handleBack = () => {
     if (onBack) {
-      onBack(quantities, products.map((p) => p.id));
+      onBack(quantities, products.map((p) => p.id), emptiesReturned);
     }
   };
 
   const handleBrowseCatalog = () => {
     if (onAddMoreProducts) {
-      onAddMoreProducts(quantities, products.map((p) => p.id));
+      onAddMoreProducts(quantities, products.map((p) => p.id), emptiesReturned);
     } else if (onBack) {
-      onBack(quantities, products.map((p) => p.id));
+      onBack(quantities, products.map((p) => p.id), emptiesReturned);
     }
   };
 
@@ -174,6 +269,7 @@ const ConfirmOrderScreen = ({
 
     onConfirm({
       quantities,
+      emptiesReturned,
       total,
       paymentMethod: paymentData.paymentMethod || 'CASH',
       receiptPhotoUri: paymentData.receiptPhotoUri || null,
@@ -331,13 +427,62 @@ const ConfirmOrderScreen = ({
                     </View>
 
                     {/* Quantity Control Pill with Stock Guard */}
-                    <QuantityControl
-                      quantity={quantities[item.id] ?? 1}
-                      maxQuantity={item.quantityRemaining}
-                      onUpdateQuantity={(newQty) =>
-                        handleUpdateQuantity(item.id, newQty)
-                      }
-                    />
+                    <View className="flex-row items-center justify-between">
+                      <Text className="text-gray-500 text-[11px] font-semibold">Order Qty</Text>
+                      <QuantityControl
+                        quantity={quantities[item.id] ?? 1}
+                        maxQuantity={item.quantityRemaining}
+                        onUpdateQuantity={(newQty) =>
+                          handleUpdateQuantity(item.id, newQty)
+                        }
+                      />
+                    </View>
+
+                    {/* Empties Returned Control & Net Canister Swap Indicator */}
+                    {(() => {
+                      const soldQty = quantities[item.id] || 0;
+                      const returnedQty = emptiesReturned[item.id] ?? 0;
+                      const existingDebt = getExistingProductDebt(item.id);
+                      const netChange = soldQty - returnedQty;
+                      const netLabel =
+                        netChange === 0
+                          ? 'Swap (0)'
+                          : netChange > 0
+                          ? `+${netChange} loaned`
+                          : `${netChange} returned`;
+                      const netColor =
+                        netChange === 0
+                          ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                          : netChange > 0
+                          ? 'text-amber-700 bg-amber-50 border-amber-200'
+                          : 'text-sky-700 bg-sky-50 border-sky-200';
+
+                      return (
+                        <View className="mt-2.5 pt-2.5 border-t border-gray-100">
+                          <View className="flex-row items-center justify-between">
+                            <View className="flex-1 mr-2">
+                              <Text className="text-[#0d4761] text-[11px] font-semibold">
+                                Empties Returned
+                              </Text>
+                              <View className="flex-row items-center mt-0.5 flex-wrap">
+                                <Text className="text-gray-400 text-[10px] mr-1.5">
+                                  On loan: {existingDebt}
+                                </Text>
+                                <View className={`px-1.5 py-0.5 rounded-md border ${netColor}`}>
+                                  <Text className="text-[9px] font-bold">{netLabel}</Text>
+                                </View>
+                              </View>
+                            </View>
+                            <QuantityControl
+                              quantity={returnedQty}
+                              onUpdateQuantity={(newEmpties) =>
+                                handleUpdateEmpties(item.id, newEmpties)
+                              }
+                            />
+                          </View>
+                        </View>
+                      );
+                    })()}
                   </View>
                 </View>
               ))
@@ -544,6 +689,7 @@ const ConfirmOrderScreen = ({
               customerName={customerDisplayName}
               selectedProducts={products}
               quantities={quantities}
+              emptiesReturned={emptiesReturned}
               totalAmount={calculateTotalAmount()}
               isSubmitting={isSubmitting}
               onConfirm={handleDrawerConfirm}

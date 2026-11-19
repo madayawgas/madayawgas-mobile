@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import PrimaryButton from '../../components/ui/PrimaryButton';
 import FadeInView from '../../components/ui/FadeInView';
-import { customerApi } from '../../api/endpoints/customerApi';
+import { salesService } from '../../services/salesService';
 import { customerRepository } from '../../database';
 import { networkSentinel } from '../../sync/networkSentinel';
 
@@ -43,11 +43,11 @@ const CustomerDetailsScreen = ({
         console.warn('[CustomerDetailsScreen] Failed to load local customer data:', err);
       }
 
-      // 2. If customer has a server UUID and device is online, fetch detailed remote enriched data
+      // 2. If customer has a server UUID and device is online, fetch detailed remote enriched data in background
       if (!customer?.is_locally_created && networkSentinel.isOnline()) {
         try {
           setFetchingRemote(true);
-          const remoteDetails = await customerApi.getCustomerById(customer.id);
+          const remoteDetails = await salesService.fetchEnrichedCustomerDetails(customer.id);
           if (isMounted && remoteDetails) {
             setEnrichedData(remoteDetails);
           }

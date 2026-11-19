@@ -4,13 +4,20 @@ import { Ionicons } from '@expo/vector-icons';
 import BottomNav from '../../components/navigation/BottomNav';
 import DashboardDesign from '../../../assets/svg/dashboard-bg.svg';
 import { salesService } from '../../services/salesService';
+import { dataRevalidator } from '../../services/dataRevalidator';
 import { syncScheduler } from '../../sync/syncScheduler';
 import { syncWorker } from '../../sync/syncWorker';
 import { driverRealtimeManager } from '../../realtime/driverRealtimeManager';
+import TransactionDetailsModal from '../../components/sales/TransactionDetailsModal';
+import { formatSyncStatus } from '../../utils/syncErrorFormatter';
 
 const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [selectedOrderDetails, setSelectedOrderDetails] = useState({ items: [], queueItem: null });
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [retryingSync, setRetryingSync] = useState(false);
   const [dashboardData, setDashboardData] = useState({
     trip: null,
     totalSales: 0,
@@ -20,9 +27,9 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
     isOnline: true,
   });
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (options = {}) => {
     try {
-      const data = await salesService.getDashboardData(user?.id);
+      const data = await salesService.getDashboardData(user?.id, options);
       setDashboardData(data);
     } catch (err) {
       console.warn('[DashboardScreen] Failed to load dashboard data:', err);
@@ -35,9 +42,16 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
   useEffect(() => {
     loadData();
 
-    // Subscribe to sync scheduler updates to reactively refresh on sync completion
+    // Subscribe to sync scheduler updates to reactively refresh on sync completion (local read only)
     const unsubSync = syncScheduler.subscribe(() => {
-      loadData();
+      loadData({ skipRevalidate: true });
+    });
+
+    // Subscribe to background revalidation updates (local read only)
+    const unsubReval = dataRevalidator.subscribe(({ event }) => {
+      if (event === 'TRIP_UPDATED' || event === 'INVENTORY_UPDATED') {
+        loadData({ skipRevalidate: true });
+      }
     });
 
     // Subscribe to real-time dispatch and stock events to reload immediately
@@ -46,16 +60,18 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
         event === 'TRIP_DISPATCHED' ||
         event === 'TRIP_LOAD_RECORDED' ||
         event === 'VEHICLE_STOCK_UPDATED' ||
+        event === 'TRIP_ENDED' ||
         event === 'TRIP_COMPLETED' ||
         event === 'TRIP_CANCELLED' ||
         event === 'TRIP_RECONCILED'
       ) {
-        loadData();
+        loadData({ skipRevalidate: true });
       }
     });
 
     return () => {
       if (unsubSync) unsubSync();
+      if (unsubReval) unsubReval();
       if (unsubRealtime) unsubRealtime();
     };
   }, [loadData]);
@@ -69,9 +85,88 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
         // sync error handled internally
       }
     }
-    await loadData();
+    await loadData({ forceRefresh: true });
   }, [dashboardData.isOnline, loadData, user]);
 
+  const handleOpenOrderDetails = useCallback(async (ord) => {
+    setSelectedOrder(ord);
+    setSelectedOrderDetails({ items: [], queueItem: null });
+    setDetailsLoading(true);
+    try {
+      const details = await salesService.getOrderDetails(ord.id);
+      if (details.order) {
+        setSelectedOrder(details.order);
+      }
+      setSelectedOrderDetails({
+        items: details.items || [],
+        queueItem: details.queueItem || null,
+      });
+    } catch (err) {
+      console.warn('[DashboardScreen] Failed to load order details:', err);
+    } finally {
+      setDetailsLoading(false);
+    }
+  }, []);
+
+  const handleCloseOrderDetails = useCallback(() => {
+    setSelectedOrder(null);
+    setSelectedOrderDetails({ items: [], queueItem: null });
+  }, []);
+
+  const runOrderRecoveryAction = useCallback(
+    async (orderId, action) => {
+      if (retryingSync) return;
+      setRetryingSync(true);
+      try {
+        const result = await action();
+        const refreshed = await salesService.getOrderDetails(orderId);
+        if (refreshed.order) {
+          setSelectedOrder(refreshed.order);
+        }
+        setSelectedOrderDetails({
+          items: refreshed.items || [],
+          queueItem: refreshed.queueItem || null,
+        });
+        await loadData({ skipRevalidate: true });
+
+        if (result?.offline) {
+          Alert.alert('Offline', 'Order is queued and will upload automatically when you are back online.');
+        }
+      } catch (err) {
+        Alert.alert('Upload Failed', err?.message || 'Could not update and retry upload right now.');
+      } finally {
+        setRetryingSync(false);
+      }
+    },
+    [loadData, retryingSync]
+  );
+
+  const handleRetryOrderSync = useCallback(
+    (orderId) => runOrderRecoveryAction(orderId, () => salesService.retryOrderSync(orderId)),
+    [runOrderRecoveryAction]
+  );
+
+  const handleAttachPaymentProof = useCallback(
+    (orderId, photoUri) =>
+      runOrderRecoveryAction(orderId, () => salesService.updateOrderPaymentProof(orderId, photoUri)),
+    [runOrderRecoveryAction]
+  );
+
+  const handleSwitchToCash = useCallback(
+    (orderId) =>
+      runOrderRecoveryAction(orderId, () => salesService.switchQuarantinedOrderToCash(orderId)),
+    [runOrderRecoveryAction]
+  );
+
+  const handleRegenerateAndRetry = useCallback(
+    (orderId) =>
+      runOrderRecoveryAction(orderId, () => salesService.regenerateOrderRefsAndRetry(orderId)),
+    [runOrderRecoveryAction]
+  );
+
+  const quarantinedOrders = (dashboardData.recentOrders || []).filter(
+    (o) => o.sync_status === 'QUARANTINED'
+  );
   const activeTrip = dashboardData.trip;
   const isTripActive = Boolean(activeTrip && activeTrip.status === 'IN_PROGRESS');
   const inventoryItems = dashboardData.inventory || [];
@@ -360,6 +455,31 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
             )}
           </View>
 
+          {/* Quarantined Orders Alert Banner */}
+          {quarantinedOrders.length > 0 ? (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => handleOpenOrderDetails(quarantinedOrders[0])}
+              className="bg-rose-50 border border-rose-200 rounded-2xl p-4 mb-5 flex-row items-center justify-between"
+            >
+              <View className="flex-row items-center flex-1 pr-3">
+                <View className="w-9 h-9 rounded-full bg-rose-100 items-center justify-center mr-3">
+                  <Ionicons name="alert-circle" size={20} color="#e11d48" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-rose-900 font-extrabold text-xs">
+                    {quarantinedOrders.length}{' '}
+                    {quarantinedOrders.length === 1 ? 'Order Needs' : 'Orders Need'} Attention
+                  </Text>
+                  <Text className="text-rose-700 text-[11px] mt-0.5">
+                    Tap to review and resolve so it syncs for plant reconciliation.
+                  </Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#e11d48" />
+            </TouchableOpacity>
+          ) : null}
+
           {/* Recent Transactions Card */}
           <View className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/90">
             <View className="flex-row justify-between items-center mb-3.5">
@@ -383,18 +503,34 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
             ) : dashboardData.recentOrders && dashboardData.recentOrders.length > 0 ? (
               <View>
                 {dashboardData.recentOrders.map((ord, idx) => {
-                  const isSynced = ord.sync_status === 'SYNCED';
-                  const isQuarantined = ord.sync_status === 'QUARANTINED' || ord.sync_status === 'FAILED';
+                  const syncInfo = formatSyncStatus(
+                    ord.sync_status,
+                    ord.error_code,
+                    ord.error_message,
+                    ord.synced_at
+                  );
+                  const isSynced = syncInfo.tone === 'synced';
+                  const isError = syncInfo.tone === 'error';
                   const formattedTime = ord.transacted_at
                     ? new Date(ord.transacted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                     : '';
+                  const soldCount = Number(ord.total_items_sold || 0);
+                  const emptiesCount = Number(ord.total_empties_returned || 0);
+                  const itemSummary =
+                    soldCount > 0
+                      ? `${soldCount} ${soldCount === 1 ? 'item' : 'items'}`
+                      : emptiesCount > 0
+                      ? `${emptiesCount} ${emptiesCount === 1 ? 'empty' : 'empties'}`
+                      : null;
 
                   return (
-                    <View
+                    <TouchableOpacity
                       key={ord.id || idx}
-                      className={`p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 ${
-                        idx < dashboardData.recentOrders.length - 1 ? 'mb-2.5' : ''
-                      }`}
+                      activeOpacity={0.7}
+                      onPress={() => handleOpenOrderDetails(ord)}
+                      className={`p-3.5 rounded-xl bg-slate-50 border ${
+                        isError ? 'border-rose-200' : 'border-slate-200/80'
+                      } ${idx < dashboardData.recentOrders.length - 1 ? 'mb-2.5' : ''}`}
                     >
                       <View className="flex-row justify-between items-start mb-1.5">
                         <View className="flex-1 pr-2">
@@ -414,35 +550,51 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
                       </View>
 
                       <View className="flex-row justify-between items-center pt-2 border-t border-slate-200/70">
-                        <View className="bg-white border border-slate-200 px-2.5 py-0.5 rounded-md">
-                          <Text className="text-slate-600 text-[9px] font-bold uppercase tracking-wide">
-                            {ord.payment_method || 'CASH'}
-                          </Text>
+                        <View className="flex-row items-center">
+                          <View className="bg-white border border-slate-200 px-2.5 py-0.5 rounded-md">
+                            <Text className="text-slate-600 text-[9px] font-bold uppercase tracking-wide">
+                              {ord.payment_method || 'CASH'}
+                            </Text>
+                          </View>
+                          {itemSummary ? (
+                            <Text className="text-slate-500 text-[10px] font-medium ml-2">
+                              {itemSummary}
+                            </Text>
+                          ) : null}
                         </View>
 
-                        <View
-                          className={`px-2.5 py-0.5 rounded-full ${
-                            isSynced
-                              ? 'bg-emerald-100 border border-emerald-200'
-                              : isQuarantined
-                              ? 'bg-rose-100 border border-rose-200'
-                              : 'bg-amber-100 border border-amber-200'
-                          }`}
-                        >
-                          <Text
-                            className={`text-[9px] font-extrabold uppercase tracking-wide ${
+                        <View className="flex-row items-center">
+                          <View
+                            className={`px-2.5 py-0.5 rounded-full mr-1.5 ${
                               isSynced
-                                ? 'text-emerald-800'
-                                : isQuarantined
-                                ? 'text-rose-800'
-                                : 'text-amber-800'
+                                ? 'bg-emerald-100 border border-emerald-200'
+                                : isError
+                                ? 'bg-rose-100 border border-rose-200'
+                                : 'bg-amber-100 border border-amber-200'
                             }`}
                           >
-                            {ord.sync_status || 'PENDING'}
-                          </Text>
+                            <Text
+                              className={`text-[9px] font-extrabold tracking-wide ${
+                                isSynced
+                                  ? 'text-emerald-800'
+                                  : isError
+                                  ? 'text-rose-800'
+                                  : 'text-amber-800'
+                              }`}
+                            >
+                              {syncInfo.label}
+                            </Text>
+                          </View>
+                          <Ionicons name="chevron-forward" size={14} color="#94a3b8" />
                         </View>
                       </View>
-                    </View>
+
+                      {isError ? (
+                        <Text className="text-rose-700 text-[10px] font-medium mt-1.5" numberOfLines={1}>
+                          {syncInfo.summary}
+                        </Text>
+                      ) : null}
+                    </TouchableOpacity>
                   );
                 })}
               </View>
@@ -460,6 +612,20 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
           </View>
         </View>
       </ScrollView>
+
+      <TransactionDetailsModal
+        visible={Boolean(selectedOrder)}
+        onClose={handleCloseOrderDetails}
+        order={selectedOrder}
+        items={selectedOrderDetails.items}
+        queueItem={selectedOrderDetails.queueItem}
+        loading={detailsLoading}
+        retrying={retryingSync}
+        onRetrySync={handleRetryOrderSync}
+        onAttachPaymentProof={handleAttachPaymentProof}
+        onSwitchToCash={handleSwitchToCash}
+        onRegenerateAndRetry={handleRegenerateAndRetry}
+      />
 
       {/* Floating Bottom Nav */}
       <BottomNav activeTab={activeTab} onSelectTab={onSelectTab} />

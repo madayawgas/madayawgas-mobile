@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import BottomNav from '../../components/navigation/BottomNav';
 import DashboardDesign from '../../../assets/svg/driver-dashboard-bg.svg';
 import { driverService } from '@/services/driverService';
+import { dataRevalidator } from '@/services/dataRevalidator';
 import { syncScheduler } from '@/sync/syncScheduler';
 import { socketClient } from '@/realtime';
 import FuelEntryModal from '../../components/driver/FuelEntryModal';
@@ -45,10 +46,10 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
   const [isSyncing, setIsSyncing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Load operational context
-  const loadDashboardData = useCallback(async () => {
+  // Load operational context (Local-First)
+  const loadDashboardData = useCallback(async (options = {}) => {
     try {
-      const data = await driverService.getDashboardContext(user);
+      const data = await driverService.getDashboardContext(user, options);
       setContext(data);
     } catch (e) {
       console.warn('[DriverDashboardScreen] Error loading data:', e);
@@ -61,7 +62,7 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await loadDashboardData();
+      await loadDashboardData({ forceRefresh: true });
       if (isOnline) {
         await syncScheduler.syncNow();
       }
@@ -155,9 +156,15 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
     };
   }, [loadDashboardData]);
 
-  // Initial load
+  // Initial load + reactive background revalidation listener
   useEffect(() => {
     loadDashboardData();
+    const unsubReval = dataRevalidator.subscribe(({ event }) => {
+      if (event === 'TRIP_UPDATED' || event === 'TELEMETRY_UPDATED') {
+        loadDashboardData({ skipRevalidate: true });
+      }
+    });
+    return () => unsubReval();
   }, [loadDashboardData]);
 
   // SOS Cooldown timer
@@ -301,7 +308,7 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
               Driver Cabin Control
             </Text>
             <Text className="text-white text-3xl font-extrabold tracking-tight mt-0.5">
-              Good day, {user?.firstName || 'Danilo'}!
+              Good day, {user?.firstName || user?.username || 'Driver'}!
             </Text>
           </View>
         </View>
@@ -318,7 +325,7 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
               onPress={() => setShowSosModal(true)}
               disabled={sosCooldown > 0}
               activeOpacity={0.88}
-              className={`mb-5 py-4 px-4.5 rounded-2xl flex-row items-center justify-between shadow-sm border ${
+              className={`mb-5 py-4 px-5 rounded-2xl flex-row items-center justify-between shadow-sm border ${
                 sosCooldown > 0
                   ? 'bg-amber-500 border-amber-600'
                   : 'bg-red-600 border-red-700'

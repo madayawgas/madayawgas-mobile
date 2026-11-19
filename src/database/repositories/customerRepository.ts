@@ -54,11 +54,10 @@ export const customerRepository = {
       conditions.push(
         `(LOWER(COALESCE(business_name, '')) LIKE ?
           OR LOWER(COALESCE(contact_person, '')) LIKE ?
-          OR LOWER(COALESCE(name, '')) LIKE ?
           OR contact_number LIKE ?
           OR LOWER(COALESCE(delivery_address, '')) LIKE ?)`
       );
-      params.push(term, term, term, term, term);
+      params.push(term, term, term, term);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -66,8 +65,8 @@ export const customerRepository = {
       sortOrder === 'RECENT'
         ? 'ORDER BY created_at DESC'
         : sortOrder === 'DESC'
-        ? 'ORDER BY COALESCE(name, business_name, contact_person) DESC'
-        : 'ORDER BY COALESCE(name, business_name, contact_person) ASC';
+        ? 'ORDER BY COALESCE(NULLIF(business_name, \'\'), contact_person) DESC'
+        : 'ORDER BY COALESCE(NULLIF(business_name, \'\'), contact_person) ASC';
 
     const rows = await db.getAllAsync<any>(
       `SELECT * FROM local_customers ${whereClause} ${orderByClause};`,
@@ -86,52 +85,133 @@ export const customerRepository = {
     return mapCustomerRow(row);
   },
 
-  async upsertCustomers(customers: Customer[]): Promise<void> {
-    if (!customers || customers.length === 0) return;
+  async upsertCustomers(customers: Customer[]): Promise<boolean> {
+    if (!customers || customers.length === 0) return false;
     const db = await getDatabase();
-    for (const c of customers) {
-      const businessName = c.business_name || (c as any).businessName || c.name || '';
-      const contactPerson = c.contact_person || (c as any).contactPerson || c.name || 'Customer';
-      const contactNumber = c.contact_number || c.contactNumber || '';
-      const deliveryAddress = c.delivery_address || (c as any).deliveryAddress || c.address || '';
-      const customerType = c.customer_type || c.customerType || 'COMMERCIAL';
-      const zoneId = c.zone_id || c.zoneId || null;
-      const canisterDebt = c.canister_debt ?? c.canisterDebt ?? (c as any).total_net_canister_debt ?? (c as any).totalNetCanisterDebt ?? 0;
-      const createdAt = c.created_at || c.createdAt || new Date().toISOString();
-      const displayName = c.name || businessName || contactPerson;
+    let hasChanges = false;
 
-      await db.runAsync(
-        `INSERT INTO local_customers (
-          id, business_name, contact_person, contact_number, delivery_address,
-          customer_type, zone_id, canister_debt, is_locally_created, created_at,
-          name, address
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          business_name = excluded.business_name,
-          contact_person = excluded.contact_person,
-          contact_number = excluded.contact_number,
-          delivery_address = excluded.delivery_address,
-          customer_type = excluded.customer_type,
-          zone_id = excluded.zone_id,
-          canister_debt = excluded.canister_debt,
-          name = excluded.name,
-          address = excluded.address;`,
-        [
-          c.id,
-          businessName,
-          contactPerson,
-          contactNumber,
-          deliveryAddress,
-          customerType,
-          zoneId,
-          canisterDebt,
-          c.is_locally_created ? 1 : 0,
-          createdAt,
-          displayName,
-          deliveryAddress,
-        ]
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      // 1. Identify customers with pending local profile/registration mutations in sync_queue
+      const pendingCustomerMutations = await txn.getAllAsync<{ payload: string }>(
+        `SELECT payload FROM sync_queue
+         WHERE operation_type IN ('REGISTER_CUSTOMER', 'UPDATE_CUSTOMER')
+           AND status IN ('PENDING', 'PROCESSING');`
       );
-    }
+      const protectedCustomerIds = new Set<string>();
+      for (const row of pendingCustomerMutations) {
+        try {
+          const parsed = JSON.parse(row.payload);
+          const cid = parsed?.id || parsed?.customerId;
+          if (cid) protectedCustomerIds.add(String(cid));
+        } catch {
+          // ignore malformed payload
+        }
+      }
+
+      // 2. Compute pending (unsynced) canister debt delta per customer from local_canister_ledger
+      const pendingDebtRows = await txn.getAllAsync<{ customer_id: string; pending_delta: number }>(
+        `SELECT l.customer_id, COALESCE(SUM(l.net_balance_change), 0) AS pending_delta
+         FROM local_canister_ledger l
+         JOIN local_sales_orders o ON l.transaction_id = o.id
+         WHERE o.sync_status != 'SYNCED'
+         GROUP BY l.customer_id;`
+      );
+      const pendingDebtMap = new Map<string, number>();
+      for (const row of pendingDebtRows) {
+        pendingDebtMap.set(row.customer_id, Number(row.pending_delta || 0));
+      }
+
+      for (const c of customers) {
+        if (!c?.id) continue;
+        if (protectedCustomerIds.has(c.id)) {
+          continue;
+        }
+
+        const existing = await txn.getFirstAsync<{
+          id: string;
+          business_name: string | null;
+          contact_person: string | null;
+          contact_number: string | null;
+          delivery_address: string | null;
+          customer_type: string | null;
+          zone_id: string | null;
+          canister_debt: number;
+          is_locally_created: number;
+        }>(
+          'SELECT id, business_name, contact_person, contact_number, delivery_address, customer_type, zone_id, canister_debt, is_locally_created FROM local_customers WHERE id = ?;',
+          [c.id]
+        );
+
+        // Never overwrite locally created customers that haven't synced yet
+        if (existing && existing.is_locally_created === 1) {
+          continue;
+        }
+
+        const businessName = c.business_name || (c as any).businessName || c.name || '';
+        const contactPerson = c.contact_person || (c as any).contactPerson || c.name || 'Customer';
+        const contactNumber = c.contact_number || c.contactNumber || '';
+        const deliveryAddress = c.delivery_address || (c as any).deliveryAddress || c.address || '';
+        const customerType = c.customer_type || c.customerType || 'COMMERCIAL';
+        const zoneId = c.zone_id || c.zoneId || null;
+        const serverCanisterDebt = Number(
+          c.canister_debt ?? c.canisterDebt ?? (c as any).total_net_canister_debt ?? (c as any).totalNetCanisterDebt ?? 0
+        );
+        const pendingDelta = pendingDebtMap.get(c.id) || 0;
+        const effectiveCanisterDebt = Math.max(0, serverCanisterDebt + pendingDelta);
+        const createdAt = c.created_at || c.createdAt || new Date().toISOString();
+
+        if (
+          !existing ||
+          existing.business_name !== businessName ||
+          existing.contact_person !== contactPerson ||
+          existing.contact_number !== contactNumber ||
+          existing.delivery_address !== deliveryAddress ||
+          existing.customer_type !== customerType ||
+          existing.zone_id !== zoneId ||
+          Number(existing.canister_debt) !== effectiveCanisterDebt
+        ) {
+          hasChanges = true;
+        }
+
+        if (zoneId) {
+          await txn.runAsync(
+            `INSERT OR IGNORE INTO local_service_zones (id, code, name, is_active)
+             VALUES (?, ?, ?, 1);`,
+            [zoneId, zoneId, 'Delivery Zone']
+          );
+        }
+
+        await txn.runAsync(
+          `INSERT INTO local_customers (
+            id, business_name, contact_person, contact_number, delivery_address,
+            customer_type, zone_id, canister_debt, is_locally_created, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            business_name = excluded.business_name,
+            contact_person = excluded.contact_person,
+            contact_number = excluded.contact_number,
+            delivery_address = excluded.delivery_address,
+            customer_type = excluded.customer_type,
+            zone_id = excluded.zone_id,
+            canister_debt = excluded.canister_debt
+          WHERE local_customers.is_locally_created = 0;`,
+          [
+            c.id,
+            businessName,
+            contactPerson,
+            contactNumber,
+            deliveryAddress,
+            customerType,
+            zoneId,
+            effectiveCanisterDebt,
+            c.is_locally_created ? 1 : 0,
+            createdAt,
+          ]
+        );
+      }
+    });
+
+    return hasChanges;
   },
 
   async createOfflineCustomer(customer: Customer): Promise<void> {
@@ -144,28 +224,33 @@ export const customerRepository = {
     const zoneId = customer.zone_id || customer.zoneId || null;
     const canisterDebt = customer.canister_debt ?? customer.canisterDebt ?? 0;
     const createdAt = customer.created_at || customer.createdAt || new Date().toISOString();
-    const displayName = customer.name || businessName || contactPerson;
 
-    await db.runAsync(
-      `INSERT INTO local_customers (
-        id, business_name, contact_person, contact_number, delivery_address,
-        customer_type, zone_id, canister_debt, is_locally_created, created_at,
-        name, address
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?);`,
-      [
-        customer.id,
-        businessName,
-        contactPerson,
-        contactNumber,
-        deliveryAddress,
-        customerType,
-        zoneId,
-        canisterDebt,
-        createdAt,
-        displayName,
-        deliveryAddress,
-      ]
-    );
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      if (zoneId) {
+        await txn.runAsync(
+          `INSERT OR IGNORE INTO local_service_zones (id, code, name, is_active)
+           VALUES (?, ?, ?, 1);`,
+          [zoneId, zoneId, 'Delivery Zone']
+        );
+      }
+      await txn.runAsync(
+        `INSERT INTO local_customers (
+          id, business_name, contact_person, contact_number, delivery_address,
+          customer_type, zone_id, canister_debt, is_locally_created, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?);`,
+        [
+          customer.id,
+          businessName,
+          contactPerson,
+          contactNumber,
+          deliveryAddress,
+          customerType,
+          zoneId,
+          canisterDebt,
+          createdAt,
+        ]
+      );
+    });
   },
 
   async updateCustomerDebt(customerId: string, netDebtChange: number): Promise<void> {
@@ -208,6 +293,17 @@ export const customerRepository = {
     );
   },
 
+  async markCustomerNeedsPreIngestion(customerId: string): Promise<void> {
+    if (!customerId) return;
+    const db = await getDatabase();
+    await db.runAsync(
+      `UPDATE local_customers
+       SET is_locally_created = 1
+       WHERE id = ?;`,
+      [customerId]
+    );
+  },
+
   async getAvailableZones(): Promise<{ id: string; name: string; code?: string }[]> {
     const db = await getDatabase();
     const rows = await db.getAllAsync<{ zone_id: string; zone_name: string | null; zone_code: string | null }>(
@@ -236,8 +332,7 @@ export const customerRepository = {
       `SELECT
          cl.product_id,
          COALESCE(
-           (SELECT product_name FROM local_vehicle_inventory WHERE product_id = cl.product_id LIMIT 1),
-           (SELECT product_name FROM local_sales_items WHERE product_id = cl.product_id LIMIT 1),
+           p.name,
            CASE 
              WHEN cl.product_id LIKE '%canister%' THEN '170g Butane Canister'
              WHEN cl.product_id LIKE '%11kg%' THEN '11kg LPG Cylinder'
@@ -248,6 +343,7 @@ export const customerRepository = {
          SUM(cl.net_balance_change) AS net_balance,
          SUM(CASE WHEN so.sync_status != 'SYNCED' THEN cl.net_balance_change ELSE 0 END) AS pending_balance
        FROM local_canister_ledger cl
+       LEFT JOIN local_product_catalog p ON p.product_id = cl.product_id
        LEFT JOIN local_sales_orders so ON so.id = cl.transaction_id
        WHERE cl.customer_id = ?
        GROUP BY cl.product_id

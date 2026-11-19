@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import { Ionicons } from '@expo/vector-icons';
 import PrimaryButton from '../../components/ui/PrimaryButton';
 import FadeInView from '../../components/ui/FadeInView';
 import { printService } from '../../services/printService';
+import { salesService } from '../../services/salesService';
+import { syncScheduler } from '../../sync/syncScheduler';
 
 const ReceiptScreen = ({ orderData, onDone }) => {
   const [showPhotoModal, setShowPhotoModal] = useState(false);
@@ -24,9 +26,49 @@ const ReceiptScreen = ({ orderData, onDone }) => {
   const trip = orderData?.trip || null;
   const paymentProofUri = orderData?.paymentProofUri || order?.payment_reference || null;
 
+  const [liveSyncStatus, setLiveSyncStatus] = useState(order?.sync_status || 'PENDING');
+  const [syncMeta, setSyncMeta] = useState({ isOnline: false, isSyncing: false });
+
+  useEffect(() => {
+    setLiveSyncStatus(order?.sync_status || 'PENDING');
+  }, [order?.id, order?.sync_status]);
+
+  useEffect(() => {
+    if (!order?.id) return undefined;
+    let cancelled = false;
+
+    const refreshOrderStatus = async () => {
+      try {
+        const details = await salesService.getOrderDetails(order.id);
+        if (!cancelled && details?.order?.sync_status) {
+          setLiveSyncStatus(details.order.sync_status);
+        }
+      } catch (err) {
+        console.warn('[ReceiptScreen] Failed to refresh sync status:', err);
+      }
+    };
+
+    refreshOrderStatus();
+    const unsubscribe = syncScheduler.subscribe((status) => {
+      if (cancelled) return;
+      setSyncMeta({
+        isOnline: Boolean(status?.isOnline),
+        isSyncing: Boolean(status?.isSyncing),
+      });
+      refreshOrderStatus();
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [order?.id]);
+
   const isZeroSale = order?.receipt_number?.startsWith('CD-');
   const docTitle = isZeroSale ? 'CANISTER RETURN DECLARATION' : 'OFFICIAL SALES INVOICE';
-  const isSynced = order?.sync_status === 'SYNCED';
+  const isSynced = liveSyncStatus === 'SYNCED';
+  const isQuarantined = liveSyncStatus === 'QUARANTINED';
+  const isActivelySyncing = !isSynced && !isQuarantined && syncMeta.isOnline && syncMeta.isSyncing;
 
   const customerName =
     customer?.business_name ||
@@ -119,26 +161,70 @@ const ReceiptScreen = ({ orderData, onDone }) => {
                 className={`mt-3 px-3 py-1 rounded-full flex-row items-center ${
                   isSynced
                     ? 'bg-emerald-50 border border-emerald-300'
+                    : isQuarantined
+                    ? 'bg-red-50 border border-red-300'
+                    : isActivelySyncing
+                    ? 'bg-sky-50 border border-sky-300'
                     : 'bg-amber-50 border border-amber-300'
                 }`}
               >
                 <Ionicons
-                  name={isSynced ? 'checkmark-circle' : 'cloud-offline-outline'}
+                  name={
+                    isSynced
+                      ? 'checkmark-circle'
+                      : isQuarantined
+                      ? 'alert-circle-outline'
+                      : isActivelySyncing
+                      ? 'sync-outline'
+                      : 'cloud-offline-outline'
+                  }
                   size={14}
-                  color={isSynced ? '#16a34a' : '#d97706'}
+                  color={
+                    isSynced
+                      ? '#16a34a'
+                      : isQuarantined
+                      ? '#dc2626'
+                      : isActivelySyncing
+                      ? '#0284c7'
+                      : '#d97706'
+                  }
                   className="mr-1.5"
                 />
                 <Text
                   className={`text-[11px] font-bold ${
-                    isSynced ? 'text-emerald-800' : 'text-amber-800'
+                    isSynced
+                      ? 'text-emerald-800'
+                      : isQuarantined
+                      ? 'text-red-800'
+                      : isActivelySyncing
+                      ? 'text-sky-800'
+                      : 'text-amber-800'
                   }`}
                 >
-                  {isSynced ? 'SYNCED (SERVER CONFIRMED)' : 'RECORDED (OFFLINE / PENDING SYNC)'}
+                  {isSynced
+                    ? 'SYNCED (SERVER CONFIRMED)'
+                    : isQuarantined
+                    ? 'SYNC NEEDS ATTENTION'
+                    : isActivelySyncing
+                    ? 'SYNCING TO SERVER...'
+                    : 'RECORDED (OFFLINE / PENDING SYNC)'}
                 </Text>
               </View>
               {!isSynced && (
-                <Text className="text-amber-700/80 text-[10px] text-center mt-1">
-                  Saved securely in local database. Will sync automatically when connected.
+                <Text
+                  className={`text-[10px] text-center mt-1 ${
+                    isQuarantined
+                      ? 'text-red-700/80'
+                      : isActivelySyncing
+                      ? 'text-sky-700/80'
+                      : 'text-amber-700/80'
+                  }`}
+                >
+                  {isQuarantined
+                    ? 'Saved locally, but server sync needs attention. Check Recent Transactions to retry.'
+                    : isActivelySyncing
+                    ? 'Uploading transaction to server now...'
+                    : 'Saved securely in local database. Will sync automatically when connected.'}
                 </Text>
               )}
             </View>

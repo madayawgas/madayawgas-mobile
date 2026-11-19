@@ -153,7 +153,7 @@ export interface SyncBatchTransactionItemPayload {
   quantitySold: number;
   emptiesReturned?: number;
   emptiesDefective?: number;
-  unitPriceAtSale: number;
+  unitPriceAtSale?: number;
   subtotalAmount?: number;
 }
 

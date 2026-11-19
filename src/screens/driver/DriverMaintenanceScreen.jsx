@@ -1,4 +1,5 @@
 import { driverService } from "@/services/driverService";
+import { dataRevalidator } from "@/services/dataRevalidator";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -46,9 +47,9 @@ const DriverMaintenanceScreen = ({
   const [showFuelModal, setShowFuelModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (options = {}) => {
     try {
-      const data = await driverService.getVehicleHealthData();
+      const data = await driverService.getVehicleHealthData(undefined, options);
       setHealthData(data);
     } catch (e) {
       console.warn("[DriverMaintenanceScreen] Error loading data:", e);
@@ -60,7 +61,7 @@ const DriverMaintenanceScreen = ({
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await loadData();
+      await loadData({ forceRefresh: true });
     } catch (e) {
       console.warn("[DriverMaintenanceScreen] Error refreshing:", e);
     } finally {
@@ -70,6 +71,16 @@ const DriverMaintenanceScreen = ({
 
   useEffect(() => {
     loadData();
+    const unsubReval = dataRevalidator.subscribe(({ event }) => {
+      if (
+        event === "TELEMETRY_UPDATED" ||
+        event === "FUEL_LOGS_UPDATED" ||
+        event === "MAINTENANCE_LOGS_UPDATED"
+      ) {
+        loadData({ skipRevalidate: true });
+      }
+    });
+    return () => unsubReval();
   }, [loadData]);
 
   // Frontline Vehicle Fleet Real-Time Events Listener

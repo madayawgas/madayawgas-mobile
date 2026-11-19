@@ -14,7 +14,7 @@ import DriverProfileScreen from './src/screens/driver/DriverProfileScreen';
 import FadeInView from './src/components/ui/FadeInView';
 import { PaperProvider, MD3LightTheme } from 'react-native-paper';
 import { syncScheduler } from './src/sync';
-import { getDatabase } from './src/database';
+import { getDatabase, setActiveDatabaseUser } from './src/database';
 import { authService } from './src/services/authService';
 import { authApi } from './src/api/endpoints/authApi';
 import { useBackHandler } from './src/hooks/useBackHandler';
@@ -109,11 +109,13 @@ export default function App() {
 
     const initApp = async () => {
       try {
-        // 2. Await local SQLite database schema initialization and pre-migrations
+        // 2. Hydrate persistent session first so SQLite opens the account-isolated DB
+        const session = await authService.getSession();
+        await setActiveDatabaseUser(session?.id || null);
+
+        // 3. Await local SQLite database schema initialization and 3NF migrations
         await getDatabase();
 
-        // 3. Hydrate persistent session if token exists
-        const session = await authService.getSession();
         if (!isMounted) return;
 
         if (session && session.token) {

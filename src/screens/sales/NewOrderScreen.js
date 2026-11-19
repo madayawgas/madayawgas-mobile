@@ -12,6 +12,7 @@ import ProductOrderCard from '../../components/sales/ProductOrderCard';
 import PrimaryButton from '../../components/ui/PrimaryButton';
 import FadeInView from '../../components/ui/FadeInView';
 import { salesService } from '../../services/salesService';
+import { dataRevalidator } from '../../services/dataRevalidator';
 
 const NewOrderScreen = ({
   customer,
@@ -25,10 +26,26 @@ const NewOrderScreen = ({
   const [selectedProductIds, setSelectedProductIds] = useState(initialSelectedProductIds);
 
   useEffect(() => {
+    let isMounted = true;
     salesService.getProductCatalog().then((data) => {
-      setProducts(data);
-      setLoading(false);
+      if (isMounted) {
+        setProducts(data);
+        setLoading(false);
+      }
     });
+
+    const unsub = dataRevalidator.subscribe(({ event }) => {
+      if (event === 'CATALOG_UPDATED' || event === 'INVENTORY_UPDATED' || event === 'TRIP_UPDATED') {
+        salesService.getProductCatalog({ skipRevalidate: true }).then((data) => {
+          if (isMounted) setProducts(data);
+        });
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsub();
+    };
   }, []);
 
   const toggleSelectProduct = (id) => {

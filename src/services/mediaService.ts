@@ -2,6 +2,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 import { ENV } from '@/config';
+import { ApiError } from '@/api/client';
 import { authService } from './authService';
 import { networkSentinel } from '@/sync/networkSentinel';
 import { compressAndPrepareImage } from '@/utils/imageCompressor';
@@ -217,10 +218,16 @@ export const mediaService = {
         };
       }
 
-      throw new Error(`Upload failed with HTTP ${uploadTask.status}: ${uploadTask.body}`);
+      throw new ApiError(
+        `Upload failed with HTTP ${uploadTask.status}: ${uploadTask.body}`,
+        uploadTask.status
+      );
     } catch (error: any) {
       console.warn('[MediaService] Media upload failed, deferring to sync queue:', error?.message || error);
-      networkSentinel.reportNetworkFailure();
+      // Only report network failure for transport/timeout errors, not HTTP responses from the server
+      if (!(error instanceof ApiError)) {
+        networkSentinel.reportNetworkFailure();
+      }
       throw error;
     }
   },
