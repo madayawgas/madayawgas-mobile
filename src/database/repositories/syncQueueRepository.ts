@@ -284,4 +284,32 @@ export const syncQueueRepository = {
     const db = await getDatabase();
     await db.runAsync('UPDATE sync_queue SET payload = ? WHERE id = ?;', [payload, id]);
   },
+
+  /**
+   * Updates payload JSON and resets a quarantined/failed item back to PENDING.
+   */
+  async updatePayloadAndResetPending(id: string, payload: string): Promise<void> {
+    const db = await getDatabase();
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      await txn.runAsync(
+        `UPDATE sync_queue
+         SET payload = ?,
+             status = 'PENDING',
+             retry_count = 0,
+             error_code = NULL,
+             error_message = NULL,
+             last_error = NULL
+         WHERE id = ?;`,
+        [payload, id]
+      );
+      await txn.runAsync(
+        `UPDATE local_sales_orders
+         SET sync_status = 'PENDING',
+             error_code = NULL,
+             error_message = NULL
+         WHERE id = ? AND sync_status != 'SYNCED';`,
+        [id]
+      );
+    });
+  },
 };

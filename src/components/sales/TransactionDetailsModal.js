@@ -5,10 +5,12 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import BottomSheetModal from '../ui/BottomSheetModal';
 import { formatSyncStatus } from '../../utils/syncErrorFormatter';
+import { mediaService } from '../../services/mediaService';
 
 const TransactionDetailsModal = ({
   visible,
@@ -19,6 +21,9 @@ const TransactionDetailsModal = ({
   loading = false,
   retrying = false,
   onRetrySync,
+  onAttachPaymentProof,
+  onSwitchToCash,
+  onRegenerateAndRetry,
 }) => {
   if (!order && !visible) {
     return null;
@@ -50,10 +55,48 @@ const TransactionDetailsModal = ({
 
   const paymentLabel =
     (order?.payment_method || 'CASH').toUpperCase() === 'GCASH' ? 'GCash' : 'Cash';
+  const isGcash = (order?.payment_method || '').toUpperCase() === 'GCASH';
+  const isDuplicateConflict = effectiveErrorCode === 'DUPLICATE_ORDER_CONFLICT';
+
+  const handlePickPhoto = async (source) => {
+    try {
+      const uri =
+        source === 'camera'
+          ? await mediaService.capturePhoto()
+          : await mediaService.pickFromGallery();
+      if (uri && onAttachPaymentProof) {
+        onAttachPaymentProof(order.id, uri);
+      }
+    } catch (err) {
+      Alert.alert('Photo Error', err?.message || 'Could not capture or select photo.');
+    }
+  };
+
+  const handlePromptAttachPhoto = () => {
+    Alert.alert('Attach GCash Receipt', 'Choose how to attach the payment screenshot.', [
+      { text: 'Take Photo', onPress: () => handlePickPhoto('camera') },
+      { text: 'Choose from Gallery', onPress: () => handlePickPhoto('gallery') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const handleConfirmSwitchToCash = () => {
+    Alert.alert(
+      'Switch Payment to Cash?',
+      'This will update the payment method to Cash (keeping all items and totals unchanged) and retry uploading.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Switch to Cash',
+          onPress: () => onSwitchToCash && onSwitchToCash(order.id),
+        },
+      ]
+    );
+  };
 
   return (
     <BottomSheetModal visible={visible} onClose={onClose} maxHeight="85%">
-      <View className="bg-white rounded-t-3xl px-5 pt-7 pb-7 shadow-2xl">
+      <View className="bg-white rounded-t-[32px] px-5 pt-7 pb-6 overflow-hidden flex-shrink">
         {/* Header */}
         <View className="flex-row justify-between items-start mb-4">
           <View className="flex-1 pr-3">
@@ -99,7 +142,11 @@ const TransactionDetailsModal = ({
           </View>
         </View>
 
-        <ScrollView showsVerticalScrollIndicator={false} className="max-h-[420px]">
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          className="flex-shrink"
+          contentContainerStyle={{ paddingBottom: 12 }}
+        >
           {/* Sync Status / Error Box */}
           <View
             className={`rounded-2xl p-3.5 mb-4 border ${
@@ -150,21 +197,72 @@ const TransactionDetailsModal = ({
               </View>
             </View>
 
-            {isError && onRetrySync ? (
-              <TouchableOpacity
-                onPress={() => onRetrySync(order.id)}
-                disabled={retrying}
-                className="mt-3 bg-rose-600 rounded-xl py-2.5 px-4 flex-row items-center justify-center"
-              >
-                {retrying ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <>
-                    <Ionicons name="refresh" size={14} color="#ffffff" style={{ marginRight: 6 }} />
-                    <Text className="text-white text-xs font-bold">Try Again</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+            {isError ? (
+              <View className="mt-3 gap-2">
+                {isGcash && onAttachPaymentProof ? (
+                  <TouchableOpacity
+                    onPress={handlePromptAttachPhoto}
+                    disabled={retrying}
+                    className="bg-[#0d4761] rounded-xl py-2.5 px-4 flex-row items-center justify-center"
+                  >
+                    {retrying ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <>
+                        <Ionicons name="camera-outline" size={14} color="#ffffff" style={{ marginRight: 6 }} />
+                        <Text className="text-white text-xs font-bold">Attach New GCash Photo</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                ) : null}
+
+                {isDuplicateConflict && onRegenerateAndRetry ? (
+                  <TouchableOpacity
+                    onPress={() => onRegenerateAndRetry(order.id)}
+                    disabled={retrying}
+                    className="bg-[#0d4761] rounded-xl py-2.5 px-4 flex-row items-center justify-center"
+                  >
+                    {retrying ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <>
+                        <Ionicons name="git-branch-outline" size={14} color="#ffffff" style={{ marginRight: 6 }} />
+                        <Text className="text-white text-xs font-bold">New Ref & Retry</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                ) : null}
+
+                <View className="flex-row gap-2">
+                  {onRetrySync ? (
+                    <TouchableOpacity
+                      onPress={() => onRetrySync(order.id)}
+                      disabled={retrying}
+                      className="flex-1 bg-rose-600 rounded-xl py-2.5 px-3 flex-row items-center justify-center"
+                    >
+                      {retrying ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <>
+                          <Ionicons name="refresh" size={14} color="#ffffff" style={{ marginRight: 5 }} />
+                          <Text className="text-white text-xs font-bold">Try Again</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  ) : null}
+
+                  {isGcash && onSwitchToCash ? (
+                    <TouchableOpacity
+                      onPress={handleConfirmSwitchToCash}
+                      disabled={retrying}
+                      className="flex-1 bg-white border border-rose-300 rounded-xl py-2.5 px-3 flex-row items-center justify-center"
+                    >
+                      <Ionicons name="cash-outline" size={14} color="#be123c" style={{ marginRight: 5 }} />
+                      <Text className="text-rose-700 text-xs font-bold">Switch to Cash</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </View>
             ) : null}
           </View>
 

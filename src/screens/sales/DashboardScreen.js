@@ -112,12 +112,12 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
     setSelectedOrderDetails({ items: [], queueItem: null });
   }, []);
 
-  const handleRetryOrderSync = useCallback(
-    async (orderId) => {
+  const runOrderRecoveryAction = useCallback(
+    async (orderId, action) => {
       if (retryingSync) return;
       setRetryingSync(true);
       try {
-        const result = await salesService.retryOrderSync(orderId);
+        const result = await action();
         const refreshed = await salesService.getOrderDetails(orderId);
         if (refreshed.order) {
           setSelectedOrder(refreshed.order);
@@ -132,7 +132,7 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
           Alert.alert('Offline', 'Order is queued and will upload automatically when you are back online.');
         }
       } catch (err) {
-        Alert.alert('Upload Failed', err?.message || 'Could not retry upload right now.');
+        Alert.alert('Upload Failed', err?.message || 'Could not update and retry upload right now.');
       } finally {
         setRetryingSync(false);
       }
@@ -140,6 +140,32 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
     [loadData, retryingSync]
   );
 
+  const handleRetryOrderSync = useCallback(
+    (orderId) => runOrderRecoveryAction(orderId, () => salesService.retryOrderSync(orderId)),
+    [runOrderRecoveryAction]
+  );
+
+  const handleAttachPaymentProof = useCallback(
+    (orderId, photoUri) =>
+      runOrderRecoveryAction(orderId, () => salesService.updateOrderPaymentProof(orderId, photoUri)),
+    [runOrderRecoveryAction]
+  );
+
+  const handleSwitchToCash = useCallback(
+    (orderId) =>
+      runOrderRecoveryAction(orderId, () => salesService.switchQuarantinedOrderToCash(orderId)),
+    [runOrderRecoveryAction]
+  );
+
+  const handleRegenerateAndRetry = useCallback(
+    (orderId) =>
+      runOrderRecoveryAction(orderId, () => salesService.regenerateOrderRefsAndRetry(orderId)),
+    [runOrderRecoveryAction]
+  );
+
+  const quarantinedOrders = (dashboardData.recentOrders || []).filter(
+    (o) => o.sync_status === 'QUARANTINED'
+  );
   const activeTrip = dashboardData.trip;
   const isTripActive = Boolean(activeTrip && activeTrip.status === 'IN_PROGRESS');
   const inventoryItems = dashboardData.inventory || [];
@@ -428,6 +454,31 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
             )}
           </View>
 
+          {/* Quarantined Orders Alert Banner */}
+          {quarantinedOrders.length > 0 ? (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => handleOpenOrderDetails(quarantinedOrders[0])}
+              className="bg-rose-50 border border-rose-200 rounded-2xl p-4 mb-5 flex-row items-center justify-between"
+            >
+              <View className="flex-row items-center flex-1 pr-3">
+                <View className="w-9 h-9 rounded-full bg-rose-100 items-center justify-center mr-3">
+                  <Ionicons name="alert-circle" size={20} color="#e11d48" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-rose-900 font-extrabold text-xs">
+                    {quarantinedOrders.length}{' '}
+                    {quarantinedOrders.length === 1 ? 'Order Needs' : 'Orders Need'} Attention
+                  </Text>
+                  <Text className="text-rose-700 text-[11px] mt-0.5">
+                    Tap to review and resolve so it syncs for plant reconciliation.
+                  </Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#e11d48" />
+            </TouchableOpacity>
+          ) : null}
+
           {/* Recent Transactions Card */}
           <View className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/90">
             <View className="flex-row justify-between items-center mb-3.5">
@@ -570,6 +621,9 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
         loading={detailsLoading}
         retrying={retryingSync}
         onRetrySync={handleRetryOrderSync}
+        onAttachPaymentProof={handleAttachPaymentProof}
+        onSwitchToCash={handleSwitchToCash}
+        onRegenerateAndRetry={handleRegenerateAndRetry}
       />
 
       {/* Floating Bottom Nav */}

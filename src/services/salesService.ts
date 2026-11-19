@@ -393,6 +393,86 @@ export const salesService = {
     await syncQueueRepository.retryQuarantinedItem(orderId);
     return syncScheduler.syncNow();
   },
+
+  /**
+   * Attaches or replaces the GCash payment proof photo for a quarantined/failed order and retries sync.
+   */
+  async updateOrderPaymentProof(orderId: string, newPhotoUri: string) {
+    const queueItem = await syncQueueRepository.getItemById(orderId);
+    if (!queueItem) {
+      throw new Error('Queued sync record for this order was not found.');
+    }
+
+    const cached = await mediaService.processAndCacheImage(newPhotoUri, 'gcash_receipt');
+    const payload = JSON.parse(queueItem.payload);
+    if (!payload.invoice) {
+      payload.invoice = {};
+    }
+    payload.invoice.paymentMethod = 'GCASH';
+    payload.invoice.paymentProofUri = cached.localUri;
+    payload.invoice.paymentProofKey = null;
+
+    await salesRepository.updateOrderRecoveryFields(orderId, { paymentMethod: 'GCASH' });
+    await syncQueueRepository.updatePayloadAndResetPending(orderId, JSON.stringify(payload));
+    return syncScheduler.syncNow();
+  },
+
+  /**
+   * Switches a quarantined GCash order to CASH (clearing missing proof requirements) and retries sync.
+   */
+  async switchQuarantinedOrderToCash(orderId: string) {
+    const queueItem = await syncQueueRepository.getItemById(orderId);
+    if (!queueItem) {
+      throw new Error('Queued sync record for this order was not found.');
+    }
+
+    const payload = JSON.parse(queueItem.payload);
+    if (!payload.invoice) {
+      payload.invoice = {};
+    }
+    payload.invoice.paymentMethod = 'CASH';
+    payload.invoice.paymentProofUri = null;
+    payload.invoice.paymentProofKey = null;
+
+    await salesRepository.updateOrderRecoveryFields(orderId, { paymentMethod: 'CASH' });
+    await syncQueueRepository.updatePayloadAndResetPending(orderId, JSON.stringify(payload));
+    return syncScheduler.syncNow();
+  },
+
+  /**
+   * Regenerates transaction/receipt numbers after a DUPLICATE_ORDER_CONFLICT and retries sync.
+   */
+  async regenerateOrderRefsAndRetry(orderId: string) {
+    const queueItem = await syncQueueRepository.getItemById(orderId);
+    if (!queueItem) {
+      throw new Error('Queued sync record for this order was not found.');
+    }
+
+    const payload = JSON.parse(queueItem.payload);
+    const suffix = Date.now().toString().slice(-6);
+    const newTxNo = `TX-R-${suffix}`;
+    const isZeroSale = Boolean(payload.invoice?.declarationNumber && !payload.invoice?.invoiceNumber);
+    const newReceiptNo = isZeroSale ? `CD-R-${suffix}` : `INV-R-${suffix}`;
+
+    payload.transactionNo = newTxNo;
+    if (payload.transaction) {
+      payload.transaction.transactionNo = newTxNo;
+    }
+    if (payload.invoice) {
+      if (isZeroSale) {
+        payload.invoice.declarationNumber = newReceiptNo;
+      } else {
+        payload.invoice.invoiceNumber = newReceiptNo;
+      }
+    }
+
+    await salesRepository.updateOrderRecoveryFields(orderId, {
+      transactionNo: newTxNo,
+      receiptNumber: newReceiptNo,
+    });
+    await syncQueueRepository.updatePayloadAndResetPending(orderId, JSON.stringify(payload));
+    return syncScheduler.syncNow();
+  },
   /**
    * Strict Stock Enforcement Policy: Validates that requested quantities do not
    * exceed remaining vehicle stock on board.
@@ -470,6 +550,7 @@ export const salesService = {
         persistentProofUri = cached.localUri;
       } catch (err: any) {
         console.warn('[SalesService] Could not cache GCash payment proof:', err?.message || err);
+        throw new Error('Could not save GCash receipt photo on this device. Please select or capture the photo again.');
       }
 
       // If online and persistent image exists, attempt eager media upload to /api/media/upload

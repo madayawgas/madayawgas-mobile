@@ -282,4 +282,32 @@ export const salesRepository = {
       [errorCode || null, errorMessage || null, orderId]
     );
   },
+
+  async updateOrderRecoveryFields(
+    orderId: string,
+    fields: { paymentMethod?: 'CASH' | 'GCASH'; transactionNo?: string; receiptNumber?: string }
+  ): Promise<void> {
+    const setClauses: string[] = [];
+    const params: any[] = [];
+
+    if (fields.paymentMethod !== undefined) {
+      setClauses.push('payment_method = ?');
+      params.push(fields.paymentMethod);
+    }
+    if (fields.transactionNo !== undefined) {
+      setClauses.push('transaction_no = ?');
+      params.push(fields.transactionNo);
+    }
+    if (fields.receiptNumber !== undefined) {
+      setClauses.push('receipt_number = ?');
+      params.push(fields.receiptNumber);
+    }
+
+    if (setClauses.length === 0) return;
+    const db = await getDatabase();
+    await db.runAsync(
+      `UPDATE local_sales_orders SET ${setClauses.join(', ')} WHERE id = ?;`,
+      [...params, orderId]
+    );
+  },
 };

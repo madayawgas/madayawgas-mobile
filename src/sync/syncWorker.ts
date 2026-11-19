@@ -1,3 +1,4 @@
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   syncQueueRepository,
   tripRepository,
@@ -274,6 +275,20 @@ export const syncWorker = {
                 }
 
                 if (photoUri.startsWith('file://')) {
+                  const fileInfo = await FileSystem.getInfoAsync(photoUri).catch(() => ({ exists: false }));
+                  if (!fileInfo.exists) {
+                    console.warn('[SyncWorker] Cached GCash receipt file missing on disk. Quarantining for re-attachment.');
+                    errors.push(`GCash receipt image missing for order ${item.id}`);
+                    handledQueueIds.add(item.id);
+                    quarantinedCount++;
+                    await syncQueueRepository.quarantineItem(
+                      item.id,
+                      'MISSING_PAYMENT_PROOF',
+                      'The saved GCash receipt photo is no longer on this device. Please attach a new photo or switch to Cash.'
+                    );
+                    continue;
+                  }
+
                   try {
                     const uploadRes = await mediaService.uploadMedia(photoUri, 'sales/payments');
                     p.invoice.paymentProofKey = uploadRes.storageKey;
@@ -446,6 +461,18 @@ export const syncWorker = {
                       allowQuarantine: true,
                     });
                   } else {
+                    // If backend says customer is missing, flag local customer for pre-ingestion on retry
+                    if (errCode === 'INVALID_CUSTOMER_ID' && matchedItem) {
+                      try {
+                        const matchedPayload = JSON.parse(matchedItem.payload);
+                        const custId = matchedPayload.customerId || matchedPayload.transaction?.customerId;
+                        if (custId) {
+                          await customerRepository.markCustomerNeedsPreIngestion(custId);
+                        }
+                      } catch {
+                        // Ignore payload parse errors
+                      }
+                    }
                     // Unrecoverable fatal error: quarantine immediately to stop HoL blocking
                     quarantinedCount++;
                     await syncQueueRepository.quarantineItem(queueId, errCode, errMsg);

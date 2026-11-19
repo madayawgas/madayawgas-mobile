@@ -293,6 +293,17 @@ export const customerRepository = {
     );
   },
 
+  async markCustomerNeedsPreIngestion(customerId: string): Promise<void> {
+    if (!customerId) return;
+    const db = await getDatabase();
+    await db.runAsync(
+      `UPDATE local_customers
+       SET is_locally_created = 1
+       WHERE id = ?;`,
+      [customerId]
+    );
+  },
+
   async getAvailableZones(): Promise<{ id: string; name: string; code?: string }[]> {
     const db = await getDatabase();
     const rows = await db.getAllAsync<{ zone_id: string; zone_name: string | null; zone_code: string | null }>(
