@@ -34,6 +34,7 @@ const OrderSummaryDrawer = ({
   customerName = 'Customer',
   selectedProducts = [],
   quantities = {},
+  emptiesReturned = {},
   totalAmount = 0,
   isSubmitting = false,
   onConfirm,
@@ -222,6 +223,8 @@ const OrderSummaryDrawer = ({
               {/* Product List */}
               {selectedProducts.map((p) => {
                 const qty = quantities[p.id] || 0;
+                const returned = Math.max(0, Number(emptiesReturned[p.id] ?? 0));
+                const netChange = qty - returned;
                 const lineTotal = qty * p.price;
                 return (
                   <View key={p.id} className="flex-row items-center mb-4">
@@ -240,6 +243,10 @@ const OrderSummaryDrawer = ({
                       </Text>
                       <Text className="text-[#0d4761] text-xs font-semibold">
                         Qty: {qty} × ₱{p.price?.toLocaleString()}
+                      </Text>
+                      <Text className="text-gray-400 text-[10px] mt-0.5">
+                        Empties Returned: {returned} • Net:{' '}
+                        {netChange > 0 ? `+${netChange} loaned` : netChange < 0 ? `${netChange} returned` : '0 (Swap)'}
                       </Text>
                     </View>
 

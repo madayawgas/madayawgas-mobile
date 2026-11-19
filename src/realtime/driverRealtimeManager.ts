@@ -42,13 +42,27 @@ class DriverRealtimeManager {
       try {
         const session = await authService.getSession();
         const currentUserId = session?.id;
+        const isSalesUser = session?.role === 'sales_user';
 
-        // If dispatched to this driver or broadly available
-        if (!data?.driverUserId || !currentUserId || data.driverUserId === currentUserId) {
+        const isDriverMatch = Boolean(data?.driverUserId && currentUserId && data.driverUserId === currentUserId);
+        const isSalesMatch = Boolean(
+          isSalesUser && currentUserId && (!data?.salesUserId || data.salesUserId === currentUserId)
+        );
+        const isBroadEvent = !data?.driverUserId && !data?.salesUserId;
+
+        // Hydrate when dispatched to this driver, this sales agent, or broadly available
+        if (!currentUserId || isDriverMatch || isSalesMatch || isBroadEvent) {
           const assignment = await tripApi.fetchActiveAssignment();
           if (assignment?.trip && assignment.trip.id) {
             const rawTrip = assignment.trip as any;
             const tripId = rawTrip.id;
+            const tripSalesUserId = rawTrip.salesUserId || rawTrip.sales_user_id;
+
+            if (isSalesUser && tripSalesUserId && currentUserId && tripSalesUserId !== currentUserId) {
+              this.notifyListeners('TRIP_DISPATCHED', data);
+              return;
+            }
+
             const tripNumber = rawTrip.tripNumber || rawTrip.trip_number || `TRIP-${tripId.substring(0, 8)}`;
             const userDisplayName = session ? [session.firstName, session.lastName].filter(Boolean).join(' ') || session.username : 'Driver';
 
@@ -56,22 +70,24 @@ class DriverRealtimeManager {
               trip_id: tripId,
               trip_number: tripNumber,
               vehicle_plate: rawTrip.truckPlateNumber || rawTrip.truck_plate_number || data?.vehiclePlate || 'N/A',
-              driver_name: rawTrip.driverName || rawTrip.driver_name || userDisplayName,
-              sales_user_id: rawTrip.salesUserId || rawTrip.sales_user_id || 'UNKNOWN',
+              driver_name: rawTrip.driverName || rawTrip.driver_name || (isSalesUser ? 'Assigned Driver' : userDisplayName),
+              sales_user_id: tripSalesUserId || (isSalesUser && currentUserId ? currentUserId : 'UNKNOWN'),
               zone_id: rawTrip.zoneId || rawTrip.zone_id || 'DEFAULT',
               status: rawTrip.status || 'IN_PROGRESS',
               dispatched_at: rawTrip.departureTime || rawTrip.departure_time || data?.dispatchedAt || new Date().toISOString(),
               truck_id: rawTrip.truckId || rawTrip.truck_id || data?.vehicleId || null,
               truck_model: rawTrip.truckModel || rawTrip.truck_model || null,
-              driver_id: rawTrip.driverId || rawTrip.driver_id || currentUserId,
-              sales_user_name: rawTrip.salesUserName || rawTrip.sales_user_name || null,
+              driver_id: rawTrip.driverId || rawTrip.driver_id || (isSalesUser ? null : currentUserId),
+              sales_user_name: rawTrip.salesUserName || rawTrip.sales_user_name || (isSalesUser ? userDisplayName : null),
               zone_name: rawTrip.zoneName || rawTrip.zone_name || null,
             });
+            dataRevalidator.emit('TRIP_UPDATED');
 
             // Hydrate trip stock manifest
             try {
               const stockItems = await tripApi.fetchTripStock(tripId);
               await inventoryRepository.syncTripInventory(tripId, stockItems);
+              dataRevalidator.emit('INVENTORY_UPDATED');
             } catch (stockErr) {
               console.warn('[DriverRealtime] Error hydrating stock on TRIP_DISPATCHED:', stockErr);
             }
@@ -91,6 +107,7 @@ class DriverRealtimeManager {
         if (targetTripId) {
           const stockItems = await tripApi.fetchTripStock(targetTripId);
           await inventoryRepository.syncTripInventory(targetTripId, stockItems);
+          dataRevalidator.emit('INVENTORY_UPDATED');
         }
       } catch (e) {
         console.warn('[DriverRealtime] Error updating stock on TRIP_LOAD_RECORDED:', e);
@@ -99,13 +116,14 @@ class DriverRealtimeManager {
     });
 
     this.bindEvent('VEHICLE_STOCK_UPDATED', async (data) => {
-      console.log('[DriverRealtime] VEHICLE_STOCK_UPDATED received:', data?.action);
+      console.log('[DriverRealtime] VEHICLE_STOCK_UPDATED received:', data?.action ?? data?.tripId ?? 'event');
       try {
         const active = await tripRepository.getActiveTrip();
         const targetTripId = data?.tripId || active?.trip_id;
         if (targetTripId) {
           const stockItems = await tripApi.fetchTripStock(targetTripId);
           await inventoryRepository.syncTripInventory(targetTripId, stockItems);
+          dataRevalidator.emit('INVENTORY_UPDATED');
         }
       } catch (e) {
         console.warn('[DriverRealtime] Error updating stock on VEHICLE_STOCK_UPDATED:', e);
@@ -120,6 +138,7 @@ class DriverRealtimeManager {
         if (!data?.tripId || active?.trip_id === data.tripId) {
           if (active?.trip_id) {
             await tripRepository.updateTripStatus(active.trip_id, 'RETURNED');
+            dataRevalidator.emit('TRIP_UPDATED');
           }
         }
       } catch (e) {
@@ -135,6 +154,8 @@ class DriverRealtimeManager {
         if (!data?.tripId || active?.trip_id === data.tripId) {
           await tripRepository.clearActiveTrip();
           await inventoryRepository.clearInventory();
+          dataRevalidator.emit('TRIP_UPDATED');
+          dataRevalidator.emit('INVENTORY_UPDATED');
         }
       } catch (e) {
         console.warn('[DriverRealtime] Error handling trip completion:', e);
@@ -149,6 +170,8 @@ class DriverRealtimeManager {
         if (!data?.tripId || active?.trip_id === data.tripId) {
           await tripRepository.clearActiveTrip();
           await inventoryRepository.clearInventory();
+          dataRevalidator.emit('TRIP_UPDATED');
+          dataRevalidator.emit('INVENTORY_UPDATED');
         }
       } catch (e) {
         console.warn('[DriverRealtime] Error handling trip cancellation:', e);
@@ -163,6 +186,8 @@ class DriverRealtimeManager {
         if (!data?.tripId || active?.trip_id === data.tripId) {
           await tripRepository.clearActiveTrip();
           await inventoryRepository.clearInventory();
+          dataRevalidator.emit('TRIP_UPDATED');
+          dataRevalidator.emit('INVENTORY_UPDATED');
         }
       } catch (e) {
         console.warn('[DriverRealtime] Error handling trip reconciliation:', e);

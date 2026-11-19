@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -32,17 +32,23 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Active delivery and zone filter context (default 'ALL' to display all zones)
+  // Active delivery and zone filter context (defaults to active trip's route when dispatched, else 'ALL')
   const [activeTrip, setActiveTrip] = useState(null);
   const [availableZones, setAvailableZones] = useState([]);
   const [selectedZoneFilter, setSelectedZoneFilter] = useState('ALL');
   const [sortOrder, setSortOrder] = useState('ASC'); // 'ASC' | 'DESC' | 'RECENT'
+
+  // Refs keep callbacks stable and track trip transitions without overriding manual filter choices
+  const lastAppliedTripIdRef = useRef(undefined);
+  const selectedZoneFilterRef = useRef('ALL');
+  const sortOrderRef = useRef('ASC');
 
   // Sub-screen navigation states: 'list' | 'add' | 'edit' | 'details' | 'new_order' | 'confirm' | 'receipt'
   const [subStep, setSubStep] = useState('list');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedProductIds, setSelectedProductIds] = useState([]);
   const [orderQuantities, setOrderQuantities] = useState({});
+  const [orderEmptiesReturned, setOrderEmptiesReturned] = useState({});
   const [completedOrderData, setCompletedOrderData] = useState(null);
 
   // 1. Load active delivery trip context and available service zones with friendly names
@@ -69,16 +75,32 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
       });
 
       setAvailableZones(Array.from(zoneMap.values()));
+
+      const nextTripId = trip?.trip_id ?? null;
+      let resolvedZone = selectedZoneFilterRef.current;
+
+      if (lastAppliedTripIdRef.current !== nextTripId) {
+        lastAppliedTripIdRef.current = nextTripId;
+        const targetZone = trip?.zone_id || 'ALL';
+        if (selectedZoneFilterRef.current !== targetZone) {
+          selectedZoneFilterRef.current = targetZone;
+          setSelectedZoneFilter(targetZone);
+        }
+        resolvedZone = targetZone;
+      }
+
+      return { trip, resolvedZone };
     } catch (err) {
       console.warn('[SalesScreen] Failed to load active trip / zones:', err);
+      return { trip: null, resolvedZone: selectedZoneFilterRef.current };
     }
   }, []);
 
   // 2. Load customer catalog and products (Local-First; searchQuery is filtered in-memory without remote calls)
   const loadData = useCallback(async (zoneIdOverride, sortOverride, options = {}) => {
     try {
-      const effectiveZone = zoneIdOverride !== undefined ? zoneIdOverride : selectedZoneFilter;
-      const effectiveSort = sortOverride !== undefined ? sortOverride : sortOrder;
+      const effectiveZone = zoneIdOverride !== undefined ? zoneIdOverride : selectedZoneFilterRef.current;
+      const effectiveSort = sortOverride !== undefined ? sortOverride : sortOrderRef.current;
 
       const [customerRes, productData] = await Promise.all([
         salesService.getCustomers(effectiveZone, undefined, effectiveSort, options),
@@ -93,16 +115,27 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [selectedZoneFilter, sortOrder]);
+  }, []);
 
   // Initial load + reactive background revalidation listener
   useEffect(() => {
-    loadTripContext();
-    loadData();
+    let isMounted = true;
 
-    const unsubReval = dataRevalidator.subscribe(({ event }) => {
+    const initialize = async () => {
+      const { resolvedZone } = await loadTripContext();
+      if (isMounted) {
+        await loadData(resolvedZone, sortOrderRef.current);
+      }
+    };
+    initialize();
+
+    const unsubReval = dataRevalidator.subscribe(async ({ event }) => {
+      let resolvedZone = selectedZoneFilterRef.current;
       if (event === 'TRIP_UPDATED' || event === 'ZONES_UPDATED') {
-        loadTripContext({ skipRevalidate: true });
+        const res = await loadTripContext({ skipRevalidate: true });
+        if (res?.resolvedZone) {
+          resolvedZone = res.resolvedZone;
+        }
       }
       if (
         event === 'CUSTOMERS_UPDATED' ||
@@ -110,35 +143,38 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
         event === 'INVENTORY_UPDATED' ||
         event === 'TRIP_UPDATED'
       ) {
-        loadData(undefined, undefined, { skipRevalidate: true });
+        loadData(resolvedZone, sortOrderRef.current, { skipRevalidate: true });
       }
     });
 
     return () => {
+      isMounted = false;
       unsubReval();
     };
   }, [loadTripContext, loadData]);
 
   // Reload data strictly from local SQLite when zone filter or sort order changes
   const handleZoneFilterChange = (newZone) => {
+    selectedZoneFilterRef.current = newZone;
     setSelectedZoneFilter(newZone);
-    loadData(newZone, sortOrder, { skipRevalidate: true });
+    loadData(newZone, sortOrderRef.current, { skipRevalidate: true });
   };
 
   const handleToggleSort = () => {
     let nextSort = 'ASC';
-    if (sortOrder === 'ASC') nextSort = 'DESC';
-    else if (sortOrder === 'DESC') nextSort = 'RECENT';
+    if (sortOrderRef.current === 'ASC') nextSort = 'DESC';
+    else if (sortOrderRef.current === 'DESC') nextSort = 'RECENT';
     else nextSort = 'ASC';
 
+    sortOrderRef.current = nextSort;
     setSortOrder(nextSort);
-    loadData(selectedZoneFilter, nextSort, { skipRevalidate: true });
+    loadData(selectedZoneFilterRef.current, nextSort, { skipRevalidate: true });
   };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadTripContext({ forceRefresh: true });
-    await loadData(undefined, undefined, { forceRefresh: true });
+    const { resolvedZone } = await loadTripContext({ forceRefresh: true });
+    await loadData(resolvedZone, sortOrderRef.current, { forceRefresh: true });
   }, [loadData, loadTripContext]);
 
   // Search filtering in UI
@@ -219,7 +255,7 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
             price: product?.price || 0,
             quantity: orderSummaryData.quantities[pId],
             quantitySold: orderSummaryData.quantities[pId],
-            emptiesReturned: 0,
+            emptiesReturned: Math.max(0, Number(orderSummaryData.emptiesReturned?.[pId] ?? 0)),
             emptiesDefective: 0,
             unitPrice: product?.price || 0,
             subtotal: (orderSummaryData.quantities[pId] || 0) * (product?.price || 0),
@@ -316,6 +352,7 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
     setSubStep('list');
     setSelectedProductIds([]);
     setOrderQuantities({});
+    setOrderEmptiesReturned({});
     setSelectedCustomer(null);
     setCompletedOrderData(null);
     loadData();
@@ -406,6 +443,7 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
           }
           setSelectedProductIds([]);
           setOrderQuantities({});
+          setOrderEmptiesReturned({});
           setSubStep('new_order');
         }}
       />
@@ -463,28 +501,38 @@ const SalesScreen = ({ activeTab = 'sales', onSelectTab }) => {
         selectedProducts={selectedProductsList}
         allProducts={allProducts}
         initialQuantities={orderQuantities}
+        initialEmptiesReturned={orderEmptiesReturned}
         isSubmitting={isSubmitting}
-        onQuantitiesChange={(newQtys, newProductIds) => {
+        onQuantitiesChange={(newQtys, newProductIds, newEmpties) => {
           setOrderQuantities(newQtys);
           if (newProductIds) {
             setSelectedProductIds(newProductIds);
           }
+          if (newEmpties) {
+            setOrderEmptiesReturned(newEmpties);
+          }
         }}
-        onAddMoreProducts={(currentQtys, currentProductIds) => {
+        onAddMoreProducts={(currentQtys, currentProductIds, currentEmpties) => {
           if (currentQtys) {
             setOrderQuantities(currentQtys);
           }
           if (currentProductIds) {
             setSelectedProductIds(currentProductIds);
+          }
+          if (currentEmpties) {
+            setOrderEmptiesReturned(currentEmpties);
           }
           setSubStep('new_order');
         }}
-        onBack={(currentQtys, currentProductIds) => {
+        onBack={(currentQtys, currentProductIds, currentEmpties) => {
           if (currentQtys) {
             setOrderQuantities(currentQtys);
           }
           if (currentProductIds) {
             setSelectedProductIds(currentProductIds);
+          }
+          if (currentEmpties) {
+            setOrderEmptiesReturned(currentEmpties);
           }
           setSubStep('new_order');
         }}

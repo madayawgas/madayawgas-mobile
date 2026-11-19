@@ -244,6 +244,19 @@ async function revalidateZones(force: boolean): Promise<void> {
   );
 }
 
+/**
+ * Computes the default empties returned for a line item based on the customer's
+ * existing canister debt for that product:
+ * - New customer (debt = 0): returns 0 empties (all sold units are loaned).
+ * - Repeat customer (debt > 0): assumes 1-for-1 swap up to existing debt
+ *   (`min(quantitySold, existingProductDebt)`).
+ */
+export function computeDefaultEmptiesReturned(quantitySold: number, existingProductDebt: number): number {
+  const qty = Math.max(0, Number(quantitySold) || 0);
+  const debt = Math.max(0, Number(existingProductDebt) || 0);
+  return Math.min(qty, debt);
+}
+
 export const salesService = {
   /**
    * Local-First active trip resolution:
@@ -1102,6 +1115,82 @@ export const salesService = {
     } catch {
       return null;
     }
+  },
+
+  /**
+   * Resolves a customer's per-SKU canister debt balances by merging local SQLite
+   * `local_canister_ledger` entries with remote `canisterBalances` when online.
+   * Also returns `totalDebt` and `hasPerSkuBreakdown` for offline fallback.
+   */
+  async getCustomerProductBalances(customerId: string): Promise<{
+    balancesByProductId: Record<string, number>;
+    totalDebt: number;
+    hasPerSkuBreakdown: boolean;
+  }> {
+    if (!customerId) {
+      return { balancesByProductId: {}, totalDebt: 0, hasPerSkuBreakdown: false };
+    }
+
+    const [dbCustomer, localBalances] = await Promise.all([
+      customerRepository.getCustomerById(customerId),
+      customerRepository.getCustomerCanisterBalances(customerId),
+    ]);
+
+    let remoteDetails: any = null;
+    if (dbCustomer && !dbCustomer.is_locally_created && networkSentinel.isOnline()) {
+      remoteDetails = await this.fetchEnrichedCustomerDetails(customerId);
+    }
+
+    const balanceMap = new Map<string, number>();
+
+    for (const item of remoteDetails?.canisterBalances || []) {
+      if (item && item.productId) {
+        balanceMap.set(
+          item.productId,
+          Math.max(0, Number(item.netBalance ?? item.quantityLoaned ?? 0))
+        );
+      }
+    }
+
+    for (const item of localBalances || []) {
+      if (item && item.productId) {
+        const existing = balanceMap.get(item.productId);
+        if (existing !== undefined) {
+          balanceMap.set(
+            item.productId,
+            Math.max(0, existing + Number(item.pendingBalance || 0))
+          );
+        } else {
+          balanceMap.set(
+            item.productId,
+            Math.max(0, Number(item.netBalance ?? item.pendingBalance ?? 0))
+          );
+        }
+      }
+    }
+
+    const balancesByProductId: Record<string, number> = {};
+    for (const [productId, balance] of balanceMap.entries()) {
+      if (balance > 0) {
+        balancesByProductId[productId] = balance;
+      }
+    }
+
+    const totalDebt = Math.max(
+      0,
+      Number(
+        dbCustomer?.canister_debt ??
+          remoteDetails?.totalNetCanisterDebt ??
+          dbCustomer?.canisterDebt ??
+          0
+      )
+    );
+
+    return {
+      balancesByProductId,
+      totalDebt,
+      hasPerSkuBreakdown: Object.keys(balancesByProductId).length > 0,
+    };
   },
 
   /**

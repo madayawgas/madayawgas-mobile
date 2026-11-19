@@ -325,7 +325,7 @@ const DriverDashboardScreen = ({ user, activeTab = 'dashboard', onSelectTab }) =
               onPress={() => setShowSosModal(true)}
               disabled={sosCooldown > 0}
               activeOpacity={0.88}
-              className={`mb-5 py-4 px-4.5 rounded-2xl flex-row items-center justify-between shadow-sm border ${
+              className={`mb-5 py-4 px-5 rounded-2xl flex-row items-center justify-between shadow-sm border ${
                 sosCooldown > 0
                   ? 'bg-amber-500 border-amber-600'
                   : 'bg-red-600 border-red-700'

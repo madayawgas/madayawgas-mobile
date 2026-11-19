@@ -60,6 +60,7 @@ const DashboardScreen = ({ user, activeTab, onSelectTab }) => {
         event === 'TRIP_DISPATCHED' ||
         event === 'TRIP_LOAD_RECORDED' ||
         event === 'VEHICLE_STOCK_UPDATED' ||
+        event === 'TRIP_ENDED' ||
         event === 'TRIP_COMPLETED' ||
         event === 'TRIP_CANCELLED' ||
         event === 'TRIP_RECONCILED'
