@@ -21,7 +21,7 @@ import {
   StockShortageItem,
 } from '@/types';
 import { networkSentinel } from '@/sync/networkSentinel';
-import { syncWorker } from '@/sync/syncWorker';
+import { syncScheduler } from '@/sync/syncScheduler';
 import { mediaService } from './mediaService';
 import { authService } from './authService';
 import { dataRevalidator } from './dataRevalidator';
@@ -354,6 +354,45 @@ export const salesService = {
 
     return activeDashboardPromise;
   },
+
+  /**
+   * Fetches full local order details (line items + sync queue metadata) for a transaction.
+   */
+  async getOrderDetails(orderId: string): Promise<{
+    order: SalesOrder | null;
+    items: SalesOrderItem[];
+    queueItem: {
+      retry_count: number;
+      last_attempted_at?: string | null;
+      error_code?: string | null;
+      error_message?: string | null;
+    } | null;
+  }> {
+    const [{ order, items }, queueItem] = await Promise.all([
+      salesRepository.getOrderWithItems(orderId),
+      syncQueueRepository.getItemById(orderId),
+    ]);
+    return {
+      order,
+      items,
+      queueItem: queueItem
+        ? {
+            retry_count: queueItem.retry_count,
+            last_attempted_at: queueItem.last_attempted_at,
+            error_code: queueItem.error_code,
+            error_message: queueItem.error_message,
+          }
+        : null,
+    };
+  },
+
+  /**
+   * Resets a quarantined or failed order back to PENDING and triggers an immediate sync attempt.
+   */
+  async retryOrderSync(orderId: string) {
+    await syncQueueRepository.retryQuarantinedItem(orderId);
+    return syncScheduler.syncNow();
+  },
   /**
    * Strict Stock Enforcement Policy: Validates that requested quantities do not
    * exceed remaining vehicle stock on board.
@@ -642,7 +681,7 @@ export const salesService = {
 
     // 7. If online, initiate background sync immediately
     if (networkSentinel.isOnline()) {
-      syncWorker.runSyncCycle().catch((err) => {
+      syncScheduler.syncNow(activeTrip.sales_user_id).catch((err) => {
         console.warn('[SalesService] Immediate background sync cycle skipped:', err?.message || err);
       });
     }

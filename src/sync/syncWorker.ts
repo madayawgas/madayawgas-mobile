@@ -9,6 +9,7 @@ import { syncApi } from '@/api';
 import { apiClient } from '@/api/client';
 import { mediaService } from '@/services/mediaService';
 import { authService } from '@/services/authService';
+import { isTransientSyncError, extractSyncErrorCode } from '@/utils/syncErrorFormatter';
 import {
   SyncBatchRequest,
   SyncBatchCustomerPayload,
@@ -114,7 +115,12 @@ export const syncWorker = {
               } catch (upErr: any) {
                 console.warn('[SyncWorker] Could not upload cached fuel receipt, keeping queued for next cycle:', upErr.message);
                 errors.push(`Media upload failed for fuel receipt: ${upErr.message}`);
-                await syncQueueRepository.incrementRetry(item.id, upErr.message);
+                await syncQueueRepository.incrementRetry(
+                  item.id,
+                  upErr.message || 'Media upload failed',
+                  'MEDIA_UPLOAD_FAILED',
+                  { allowQuarantine: false }
+                );
                 continue;
               }
             }
@@ -128,7 +134,12 @@ export const syncWorker = {
               } catch (upErr: any) {
                 console.warn('[SyncWorker] Could not upload cached ticket proof, keeping queued for next cycle:', upErr.message);
                 errors.push(`Media upload failed for citation ticket: ${upErr.message}`);
-                await syncQueueRepository.incrementRetry(item.id, upErr.message);
+                await syncQueueRepository.incrementRetry(
+                  item.id,
+                  upErr.message || 'Media upload failed',
+                  'MEDIA_UPLOAD_FAILED',
+                  { allowQuarantine: false }
+                );
                 continue;
               }
             }
@@ -142,7 +153,12 @@ export const syncWorker = {
               } catch (upErr: any) {
                 console.warn('[SyncWorker] Could not upload cached incident photo, keeping queued for next cycle:', upErr.message);
                 errors.push(`Media upload failed for incident photo: ${upErr.message}`);
-                await syncQueueRepository.incrementRetry(item.id, upErr.message);
+                await syncQueueRepository.incrementRetry(
+                  item.id,
+                  upErr.message || 'Media upload failed',
+                  'MEDIA_UPLOAD_FAILED',
+                  { allowQuarantine: false }
+                );
                 continue;
               }
             }
@@ -201,9 +217,20 @@ export const syncWorker = {
             }
           }
 
-          console.warn(`[SyncWorker] Operational mutation failed (${item.operation_type}):`, err.message);
-          errors.push(err.message || `Sync failed for ${item.operation_type}`);
-          await syncQueueRepository.incrementRetry(item.id, err.message);
+          const resolvedCode = extractSyncErrorCode(err);
+          const resolvedMsg = errMsg || `Sync failed for ${item.operation_type}`;
+
+          console.warn(`[SyncWorker] Operational mutation failed (${item.operation_type}):`, resolvedCode, resolvedMsg);
+          errors.push(resolvedMsg);
+
+          if (isTransientSyncError(err)) {
+            await syncQueueRepository.incrementRetry(item.id, resolvedMsg, resolvedCode, {
+              allowQuarantine: false,
+            });
+          } else {
+            quarantinedCount++;
+            await syncQueueRepository.quarantineItem(item.id, resolvedCode, resolvedMsg);
+          }
         }
       }
 
@@ -243,13 +270,23 @@ export const syncWorker = {
                 } catch (upErr: any) {
                   console.warn('[SyncWorker] Could not upload cached GCash payment proof, deferring transaction:', upErr.message);
                   errors.push(`Media upload failed for GCash payment proof: ${upErr.message}`);
-                  await syncQueueRepository.incrementRetry(item.id, upErr.message);
+                  await syncQueueRepository.incrementRetry(
+                    item.id,
+                    upErr.message || 'Media upload failed',
+                    'MEDIA_UPLOAD_FAILED',
+                    { allowQuarantine: false }
+                  );
                   continue;
                 }
               } else {
-                console.warn('[SyncWorker] GCash transaction missing required payment proof URI or key. Deferring.');
+                console.warn('[SyncWorker] GCash transaction missing required payment proof URI or key. Quarantining.');
                 errors.push(`GCash transaction ${item.id} missing payment proof`);
-                await syncQueueRepository.incrementRetry(item.id, 'Missing payment proof key');
+                quarantinedCount++;
+                await syncQueueRepository.quarantineItem(
+                  item.id,
+                  'MISSING_PAYMENT_PROOF',
+                  'GCash payment screenshot is missing'
+                );
                 continue;
               }
             } else {
@@ -359,7 +396,9 @@ export const syncWorker = {
 
               if (errCode === 'DB_CONSTRAINT_ERROR') {
                 // Transient database error: retry up to 3 times before quarantine
-                await syncQueueRepository.incrementRetry(queueId, errMsg, errCode);
+                await syncQueueRepository.incrementRetry(queueId, errMsg, errCode, {
+                  allowQuarantine: true,
+                });
               } else {
                 // Unrecoverable fatal error: quarantine immediately to stop HoL blocking
                 quarantinedCount++;

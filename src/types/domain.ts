@@ -117,6 +117,8 @@ export interface SalesOrder {
   sync_status: SyncStatus;
   error_code?: string | null;
   error_message?: string | null;
+  total_items_sold?: number;
+  total_empties_returned?: number;
 }
 
 export interface SalesOrderItem {

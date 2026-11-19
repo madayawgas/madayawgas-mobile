@@ -182,9 +182,15 @@ export const salesRepository = {
     }
     const db = await getDatabase();
     return db.getAllAsync<SalesOrder>(
-      `SELECT * FROM local_sales_orders
-       WHERE trip_id = ?
-       ORDER BY transacted_at DESC
+      `SELECT
+         o.*,
+         COALESCE(SUM(i.quantity_sold), 0) AS total_items_sold,
+         COALESCE(SUM(i.empties_returned), 0) AS total_empties_returned
+       FROM local_sales_orders o
+       LEFT JOIN local_sales_items i ON i.sales_order_id = o.id
+       WHERE o.trip_id = ?
+       GROUP BY o.id
+       ORDER BY o.transacted_at DESC
        LIMIT ?;`,
       [tripId, limit]
     );

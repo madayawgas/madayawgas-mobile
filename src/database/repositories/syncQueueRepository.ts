@@ -18,8 +18,7 @@ export const syncQueueRepository = {
     if (userId) {
       return db.getAllAsync<SyncQueueItem>(
         `SELECT * FROM sync_queue
-         WHERE (status = 'PENDING' OR (status = 'FAILED' AND retry_count < 3))
-           AND status NOT IN ('PROCESSING', 'QUARANTINED', 'SYNCED')
+         WHERE status IN ('PENDING', 'FAILED')
            AND (user_id = ? OR user_id IS NULL)
          ORDER BY created_at ASC
          LIMIT ?;`,
@@ -28,8 +27,7 @@ export const syncQueueRepository = {
     }
     return db.getAllAsync<SyncQueueItem>(
       `SELECT * FROM sync_queue
-       WHERE (status = 'PENDING' OR (status = 'FAILED' AND retry_count < 3))
-         AND status NOT IN ('PROCESSING', 'QUARANTINED', 'SYNCED')
+       WHERE status IN ('PENDING', 'FAILED')
        ORDER BY created_at ASC
        LIMIT ?;`,
       [limit]
@@ -118,7 +116,12 @@ export const syncQueueRepository = {
     });
   },
 
-  async incrementRetry(id: string, errorMessage?: string, errorCode?: string): Promise<void> {
+  async incrementRetry(
+    id: string,
+    errorMessage?: string,
+    errorCode?: string,
+    options?: { allowQuarantine?: boolean }
+  ): Promise<void> {
     const db = await getDatabase();
     const now = new Date().toISOString();
     const item = await db.getFirstAsync<{ retry_count: number }>(
@@ -126,7 +129,8 @@ export const syncQueueRepository = {
       [id]
     );
     const newRetryCount = (item?.retry_count || 0) + 1;
-    const newStatus = newRetryCount >= 3 ? 'QUARANTINED' : 'FAILED';
+    const shouldQuarantine = Boolean(options?.allowQuarantine) && newRetryCount >= 3;
+    const newStatus = shouldQuarantine ? 'QUARANTINED' : 'FAILED';
 
     await db.withExclusiveTransactionAsync(async (txn) => {
       await txn.runAsync(
@@ -140,7 +144,7 @@ export const syncQueueRepository = {
          WHERE id = ?;`,
         [newRetryCount, newStatus, now, errorCode || null, errorMessage || null, errorMessage || null, id]
       );
-      if (newStatus === 'QUARANTINED') {
+      if (shouldQuarantine) {
         await txn.runAsync(
           `UPDATE local_sales_orders
            SET sync_status = 'QUARANTINED',
@@ -149,8 +153,45 @@ export const syncQueueRepository = {
            WHERE id = ?;`,
           [errorCode || null, errorMessage || null, id]
         );
+      } else {
+        await txn.runAsync(
+          `UPDATE local_sales_orders
+           SET error_code = COALESCE(?, error_code),
+               error_message = ?
+           WHERE id = ? AND sync_status != 'SYNCED';`,
+          [errorCode || null, errorMessage || null, id]
+        );
       }
     });
+  },
+
+  async retryQuarantinedItem(id: string): Promise<void> {
+    const db = await getDatabase();
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      await txn.runAsync(
+        `UPDATE sync_queue
+         SET status = 'PENDING',
+             retry_count = 0,
+             error_code = NULL,
+             error_message = NULL,
+             last_error = NULL
+         WHERE id = ?;`,
+        [id]
+      );
+      await txn.runAsync(
+        `UPDATE local_sales_orders
+         SET sync_status = 'PENDING',
+             error_code = NULL,
+             error_message = NULL
+         WHERE id = ? AND sync_status != 'SYNCED';`,
+        [id]
+      );
+    });
+  },
+
+  async getItemById(id: string): Promise<SyncQueueItem | null> {
+    const db = await getDatabase();
+    return db.getFirstAsync<SyncQueueItem>('SELECT * FROM sync_queue WHERE id = ?;', [id]);
   },
 
   async getPendingCount(userId?: string | null): Promise<number> {
@@ -158,7 +199,7 @@ export const syncQueueRepository = {
     if (userId) {
       const row = await db.getFirstAsync<{ count: number }>(
         `SELECT COUNT(*) AS count FROM sync_queue
-         WHERE (status = 'PENDING' OR status = 'PROCESSING' OR (status = 'FAILED' AND retry_count < 3))
+         WHERE status IN ('PENDING', 'PROCESSING', 'FAILED')
            AND (user_id = ? OR user_id IS NULL);`,
         [userId]
       );
@@ -166,7 +207,7 @@ export const syncQueueRepository = {
     }
     const row = await db.getFirstAsync<{ count: number }>(
       `SELECT COUNT(*) AS count FROM sync_queue
-       WHERE status = 'PENDING' OR status = 'PROCESSING' OR (status = 'FAILED' AND retry_count < 3);`
+       WHERE status IN ('PENDING', 'PROCESSING', 'FAILED');`
     );
     return row?.count || 0;
   },
@@ -213,7 +254,7 @@ export const syncQueueRepository = {
     const db = await getDatabase();
     const row = await db.getFirstAsync<{ count: number }>(
       `SELECT COUNT(*) AS count FROM sync_queue
-       WHERE (status = 'PENDING' OR status = 'PROCESSING' OR (status = 'FAILED' AND retry_count < 3))
+       WHERE status IN ('PENDING', 'PROCESSING', 'FAILED')
          AND (user_id = ? OR user_id IS NULL)
          AND operation_type = ?;`,
       [userId, operationType]
